@@ -543,7 +543,18 @@ export default function Editor({
       </div>
       <div className="edit-workspace">
         <div className="preview-column">
-          <div className="preview-stage">
+          <div
+            className="preview-stage"
+            onPointerDown={() => {
+              // A tap anywhere on the stage that isn't a text handle itself
+              // (those stop propagation before this ever runs) deactivates
+              // whichever text is selected, hiding its handle/delete button.
+              if (selectedTextId) {
+                setSelectedTextId(null);
+                setLiveTextPos(null);
+              }
+            }}
+          >
             <canvas
               ref={canvas}
               aria-label="Edited video preview"
@@ -1468,6 +1479,10 @@ function TextDragHandle({
   } | null>(null);
   function down(e: ReactPointerEvent<HTMLDivElement>) {
     e.preventDefault();
+    // Stops the preview stage's own pointerdown (which deselects whatever
+    // text is active on any tap outside it) from firing right behind this
+    // one and immediately undoing the selection a tap here just made.
+    e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = frameRef.current?.getBoundingClientRect();
     if (!rect) return;
