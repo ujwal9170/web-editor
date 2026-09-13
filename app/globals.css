@@ -1288,10 +1288,13 @@ header {
    (measured, not guessed) so grabbing it feels like grabbing the text
    itself. Anchored the same way text() draws it -- x is the horizontal
    center, y is the top. */
+/* Inactive by default -- an invisible hit target only, so untouched text
+   reads as plain text on the canvas, not a UI element. Selecting it (or
+   actively dragging it) is what turns on its border and delete button. */
 .text-drag-handle {
   position: absolute;
   transform: translateX(-50%);
-  border: 1.5px dashed #ffffffaa;
+  border: 1.5px dashed transparent;
   border-radius: 4px;
   pointer-events: auto;
   touch-action: none;
@@ -1835,6 +1838,9 @@ header {
     flex-direction: column;
     flex: 1;
     min-height: 0;
+    /* Clears the floating tab rail (see .tool-tabs) so the video, scrub bar
+       and timeline never render underneath it. */
+    padding-right: 68px;
   }
   .playback {
     flex: none;
@@ -2020,44 +2026,55 @@ header {
     height: 26px;
   }
 
-  /* Tools: a labelled bar at the bottom with its panel directly above it.
-     Deliberately in normal flow, not a fixed overlay -- an overlay covered the
-     video and its scrim swallowed taps meant for the play button. */
+  /* Tools: the tab rail floats on the right edge, independent of the panel
+     below -- it must stay reachable whether or not a sheet is open. The
+     panel itself stays in normal flow, not a fixed overlay, exactly as
+     before -- an overlay covered the video and its scrim swallowed taps
+     meant for the play button. With the rail no longer sharing this flex
+     column, .inspector now holds only the (collapsed-by-default) panel, so
+     it naturally takes zero extra height until a tab opens it. */
   .inspector {
     flex: none;
-    display: flex;
-    flex-direction: column-reverse;
+    display: block;
     border-width: 1px 0 0;
     border-radius: 0;
     background: #16181a;
     padding-bottom: env(safe-area-inset-bottom, 0);
   }
   .tool-tabs {
+    position: fixed;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 20;
+    flex-direction: column;
     border-bottom: 0;
-    padding: 4px 2px;
-    gap: 0;
+    border: 1px solid var(--line);
+    border-right: 0;
+    border-radius: 14px 0 0 14px;
+    background: #16181a;
+    padding: 6px;
+    gap: 4px;
   }
   .tool-tabs button {
-    padding: 8px 2px;
-    min-height: 60px;
+    padding: 8px 4px;
+    min-width: 52px;
+    min-height: 52px;
     border-radius: 10px;
   }
   .tool-tabs button.active {
-    background: transparent;
+    background: #333e2b;
   }
   /* Collapsed by default so the timeline stays visible until a tool is picked. */
   .tool-body {
     display: none;
   }
-  /* A fixed (not max-) height so the panel is the same size on every tab --
-     the video pane above it must never resize just because Text has more
-     controls than Crop. Kept small on purpose: the video is the point, the
-     panel is a scrollable drawer, not a page of its own. */
+  /* A fixed (not max-) height, now a set share of the screen rather than a
+     small drawer -- the video pane above it shrinks by exactly this much
+     whenever a tab opens it, on every tab. */
   .inspector.sheet-open .tool-body {
     display: block;
-    /* Combined with the sheet header this stays under ~20% of the screen
-       even on a short phone -- the video is the point, this is a drawer. */
-    height: 16vh;
+    height: 28vh;
     padding: 0 16px 16px;
     border-bottom: 1px solid var(--line);
     overflow-y: auto;
@@ -2238,11 +2255,12 @@ header {
     display: none;
   }
   .tool-tabs button {
-    min-height: 50px;
+    min-width: 44px;
+    min-height: 44px;
     padding: 6px 2px;
   }
   .inspector.sheet-open .tool-body {
-    height: 16vh;
+    height: 28vh;
   }
 }
 /* Persistent across editor navigation; compact/collapsible on phones. */

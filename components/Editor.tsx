@@ -1532,17 +1532,19 @@ function TextDragHandle({
       onPointerUp={up}
       onPointerCancel={up}
     >
-      <button
-        className="text-drag-delete"
-        aria-label="Delete this text"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
-        }}
-      >
-        <Trash2 size={12} />
-      </button>
+      {selected && (
+        <button
+          className="text-drag-delete"
+          aria-label="Delete this text"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          <Trash2 size={12} />
+        </button>
+      )}
     </div>
   );
 }
