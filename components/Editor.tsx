@@ -187,6 +187,16 @@ export default function Editor({
     });
     setFreehand(false);
   }
+  // Shared by the sheet's own close button and a tap on the blank preview
+  // area outside it -- exitFreehand() already flushes any in-flight
+  // freehand drag into a real change() before closing, so nothing dragged
+  // right before closing is ever silently lost.
+  function closeSheet() {
+    setSheetOpen(false);
+    exitFreehand();
+    setLiveTextPos(null);
+    setSelectedTextId(null);
+  }
   function updateOverlay(id: string, changes: Partial<Overlay>) {
     change({
       ...edit,
@@ -362,6 +372,10 @@ export default function Editor({
   // blend of the raw pointer position and center, so it can still be
   // dragged away.
   function panDown(e: ReactPointerEvent<HTMLDivElement>) {
+    // Stops the preview stage's own pointerdown (which closes the open
+    // sheet on a tap outside it) from treating the start of a legitimate
+    // drag as an "outside" tap.
+    e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = e.currentTarget.getBoundingClientRect();
     if (!videoRect) return;
@@ -620,10 +634,17 @@ export default function Editor({
           <div
             className="preview-stage"
             onPointerDown={() => {
-              // A tap anywhere on the stage that isn't a text handle itself
-              // (those stop propagation before this ever runs) deactivates
-              // whichever text is selected, hiding its handle/delete button.
-              if (selectedTextId) {
+              // A tap anywhere on the stage that isn't an interactive
+              // element itself (those stop propagation before this ever
+              // runs -- text handles, the crop-pan drag target) closes
+              // whatever tool sheet is open. Excluded in freehand mode: a
+              // tap inside the crop area that misses a handle is a normal
+              // part of adjusting it there, not an "outside" tap dismissing
+              // the sheet. With no sheet open, the same tap just
+              // deactivates whichever text is selected.
+              if (sheetOpen && !freehand) {
+                closeSheet();
+              } else if (selectedTextId) {
                 setSelectedTextId(null);
                 setLiveTextPos(null);
               }
@@ -903,12 +924,7 @@ export default function Editor({
               <button
                 className="sheet-close"
                 aria-label="Close panel"
-                onClick={() => {
-                  setSheetOpen(false);
-                  exitFreehand();
-                  setLiveTextPos(null);
-                  setSelectedTextId(null);
-                }}
+                onClick={closeSheet}
               >
                 <X size={20} />
               </button>
