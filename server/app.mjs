@@ -19,7 +19,13 @@ import {
   listUsers,
   setPassword,
 } from "./users.mjs";
-import { videoLink, initialEdit, validateEdit } from "../shared/validation.mjs";
+import {
+  videoLink,
+  initialEdit,
+  validateEdit,
+  validateTemplate,
+  editFromTemplate,
+} from "../shared/validation.mjs";
 import { cleanVideoName } from "../shared/names.mjs";
 
 export async function createApp({
@@ -75,7 +81,15 @@ export async function createApp({
   let authenticating = 0;
   // Record kinds that belong to exactly one account. Anything listed here is
   // filtered on read and ownership-checked on fetch.
-  const OWNED = ["media", "project", "export", "audio", "job", "deviceExport"];
+  const OWNED = [
+    "media",
+    "project",
+    "export",
+    "audio",
+    "job",
+    "deviceExport",
+    "template",
+  ];
   const host = process.env.HOST || "127.0.0.1";
   if (!["127.0.0.1", "localhost", "::1"].includes(host) && !hasUsers(repo))
     throw new Error(
@@ -570,14 +584,32 @@ export async function createApp({
   });
   app.post("/api/projects", (req) => {
     const media = mediaReady(req.body?.mediaId, req);
+    const durationMs = media.duration * 1000;
+    const edit = req.body?.templateId
+      ? editFromTemplate(
+          get("template", req.body.templateId, req).edit,
+          durationMs,
+        )
+      : initialEdit(durationMs);
     return repo.put("project", {
       userId: req.userId,
       mediaId: media.id,
       name: `${media.name} · edit`,
       caption: media.caption,
-      edit: initialEdit(media.duration * 1000),
+      edit,
       revision: 1,
     });
+  });
+  app.get("/api/templates", (req) => mine("template", req));
+  app.post("/api/templates", (req) => {
+    const name = z.string().min(1).max(200).parse(req.body?.name);
+    const edit = validateTemplate(req.body?.edit);
+    return repo.put("template", { userId: req.userId, name, edit });
+  });
+  app.delete("/api/templates/:id", (req) => {
+    const item = get("template", req.params.id, req);
+    repo.remove("template", item.id);
+    return { ok: true };
   });
   app.get("/api/projects/:id", (req) => {
     const project = get("project", req.params.id, req);

@@ -24,7 +24,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { api, fileUrl, clock, size, awaitJob } from "@/lib/api";
-import type { Media, Project, Export, Job } from "@/lib/types";
+import type { Media, Project, Export, Job, Template } from "@/lib/types";
 import Editor from "@/components/Editor";
 import DeviceExportQueue from "@/components/DeviceExportQueue";
 import { useDeviceExports } from "@/lib/useDeviceExports";
@@ -57,7 +57,8 @@ export default function Studio() {
     [media, setMedia] = useState<Media[]>([]),
     [projects, setProjects] = useState<Project[]>([]),
     [exports, setExports] = useState<Export[]>([]),
-    [jobs, setJobs] = useState<Job[]>([]);
+    [jobs, setJobs] = useState<Job[]>([]),
+    [templates, setTemplates] = useState<Template[]>([]);
   const [project, setProject] = useState<Project | null>(null),
     [query, setQuery] = useState(""),
     [importing, setImporting] = useState(false),
@@ -76,7 +77,9 @@ export default function Studio() {
     [watch, setWatch] = useState<Export | null>(null),
     [mediaTab, setMediaTab] = useState<"all" | "queue" | "removed">("all"),
     [menuOpen, setMenuOpen] = useState<string | null>(null),
-    [queueTick, setQueueTick] = useState(0);
+    [queueTick, setQueueTick] = useState(0),
+    [editsTab, setEditsTab] = useState<"projects" | "templates">("projects"),
+    [templatePicker, setTemplatePicker] = useState<Template | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const queueRef = useRef<QueueItem[]>([]);
   const runningRef = useRef(false);
@@ -162,16 +165,18 @@ export default function Studio() {
     bump();
   }
   async function refresh() {
-    const [m, p, e, j] = await Promise.all([
+    const [m, p, e, j, t] = await Promise.all([
       api<Media[]>("/media"),
       api<Project[]>("/projects"),
       api<Export[]>("/exports"),
       api<Job[]>("/jobs"),
+      api<Template[]>("/templates"),
     ]);
     setMedia(m);
     setProjects(p);
     setExports(e);
     setJobs(j);
+    setTemplates(t);
   }
   useEffect(() => {
     api("/auth")
@@ -285,6 +290,25 @@ export default function Studio() {
       });
       setProject({ ...p, media: item });
       setView("editor");
+    });
+  }
+  async function useTemplateWithMedia(template: Template, item: Media) {
+    await attempt(async () => {
+      const p = await api<Project>("/projects", {
+        method: "POST",
+        body: JSON.stringify({ mediaId: item.id, templateId: template.id }),
+      });
+      setTemplatePicker(null);
+      setProject({ ...p, media: item });
+      setView("editor");
+    });
+  }
+  async function deleteTemplate(item: Template) {
+    if (!confirm(`Delete template "${item.name}"? This cannot be undone.`))
+      return;
+    await attempt(async () => {
+      await api(`/templates/${item.id}`, { method: "DELETE" });
+      await refresh();
     });
   }
   const active = jobs.filter((j) => ["running", "queued"].includes(j.status));
@@ -648,12 +672,24 @@ export default function Studio() {
                       Instruments removed <span>{isolatedMedia.length}</span>
                     </button>
                   </>
+                ) : view === "editor" ? (
+                  <>
+                    <button
+                      className={editsTab === "projects" ? "selected" : ""}
+                      onClick={() => setEditsTab("projects")}
+                    >
+                      Projects <span>{projects.length}</span>
+                    </button>
+                    <button
+                      className={editsTab === "templates" ? "selected" : ""}
+                      onClick={() => setEditsTab("templates")}
+                    >
+                      Templates <span>{templates.length}</span>
+                    </button>
+                  </>
                 ) : (
                   <button className="selected">
-                    {view === "exports" ? "Exports" : "Projects"}{" "}
-                    <span>
-                      {view === "exports" ? exports.length : projects.length}
-                    </span>
+                    Exports <span>{exports.length}</span>
                   </button>
                 )}
               </div>
@@ -812,6 +848,7 @@ export default function Studio() {
                 </button>
               )}
               {view === "editor" &&
+                editsTab === "projects" &&
                 projects
                   .filter((p) =>
                     p.name.toLowerCase().includes(query.toLowerCase()),
@@ -826,6 +863,47 @@ export default function Studio() {
                       onDelete={() => deleteProject(p)}
                     />
                   ))}
+              {view === "editor" &&
+                editsTab === "templates" &&
+                templates
+                  .filter((t) =>
+                    t.name.toLowerCase().includes(query.toLowerCase()),
+                  )
+                  .map((t) => (
+                    <article className="media-card template-card" key={t.id}>
+                      <button
+                        className="thumbnail template-swatch"
+                        style={{
+                          background:
+                            t.edit.canvas.background.colors[0] ?? "#111827",
+                        }}
+                        onClick={() => setTemplatePicker(t)}
+                      >
+                        <span className="template-card-name">{t.name}</span>
+                      </button>
+                      <div className="row">
+                        <span className="grow">
+                          {t.edit.textOverlays.length} text ·{" "}
+                          {Math.round(t.edit.crop.width * 100)}%×
+                          {Math.round(t.edit.crop.height * 100)}% crop
+                        </span>
+                        <button
+                          aria-label={`Delete template ${t.name}`}
+                          onClick={() => deleteTemplate(t)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+              {view === "editor" &&
+                editsTab === "templates" &&
+                templates.length === 0 && (
+                  <p className="empty">
+                    No templates yet -- long-press a video in the editor and
+                    choose "Save as template".
+                  </p>
+                )}
               {view === "exports" &&
                 exports
                   .filter((x) =>
@@ -1138,6 +1216,52 @@ export default function Studio() {
             <video src={fileUrl("export", watch.id)} controls autoPlay />
             <h3>{watch.name}</h3>
             <p>{watch.caption}</p>
+          </section>
+        </div>
+      )}
+      {templatePicker && (
+        <div
+          className="modal-backdrop"
+          onClick={() => !busy && setTemplatePicker(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="Start from template"
+            className="modal media-picker"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>Use "{templatePicker.name}" with</h2>
+            <p className="hint">
+              Pick a clip -- crop, text and background from the template
+              apply to it, sized to its own length.
+            </p>
+            {sourceMedia.filter((m) => m.status === "ready").length === 0 ? (
+              <p className="empty">No ready clips in Media yet.</p>
+            ) : (
+              <div className="media-picker-grid">
+                {sourceMedia
+                  .filter((m) => m.status === "ready")
+                  .map((m) => (
+                    <button
+                      key={m.id}
+                      className="media-picker-item"
+                      disabled={busy}
+                      onClick={() => useTemplateWithMedia(templatePicker, m)}
+                    >
+                      <img src={fileUrl("media", m.id, "thumbnail")} alt={m.name} />
+                      <span>{m.name}</span>
+                    </button>
+                  ))}
+              </div>
+            )}
+            <button
+              className="wide subtle"
+              disabled={busy}
+              onClick={() => setTemplatePicker(null)}
+            >
+              Cancel
+            </button>
           </section>
         </div>
       )}

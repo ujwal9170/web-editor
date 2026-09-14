@@ -157,6 +157,38 @@ export function videoLink(raw) {
     };
   throw new Error(error);
 }
+// A template is the subset of an edit that generalizes across different
+// source clips -- crop, background, text styling/position. Segments and
+// audio mode are deliberately excluded: they only make sense relative to a
+// specific video's own timeline/vocals. textOverlays carries no startMs/
+// endMs for the same reason -- applying a template gives it a fresh
+// full-duration span on whatever clip it's applied to.
+export const templateEditSchema = z.object({
+  canvas: editSchema.shape.canvas,
+  crop: editSchema.shape.crop,
+  textOverlays: z
+    .array(editSchema.shape.textOverlays.element.omit({ startMs: true, endMs: true }))
+    .max(12),
+});
+export function validateTemplate(raw) {
+  return templateEditSchema.parse(raw);
+}
+// Builds a full edit for a fresh project from a template plus the new
+// clip's own duration -- text overlays span the whole clip by default.
+export function editFromTemplate(templateEdit, durationMs) {
+  return {
+    version: 1,
+    canvas: templateEdit.canvas,
+    crop: templateEdit.crop,
+    segments: [{ startMs: 0, endMs: durationMs, enabled: true }],
+    textOverlays: templateEdit.textOverlays.map((t) => ({
+      ...t,
+      startMs: 0,
+      endMs: durationMs,
+    })),
+    audio: { mode: "original", derivativeId: null },
+  };
+}
 export function initialEdit(durationMs) {
   return {
     version: 1,

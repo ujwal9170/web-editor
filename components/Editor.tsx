@@ -249,6 +249,31 @@ export default function Editor({
       onError(e.message);
     }
   }
+  // Saves just the reusable part of the current edit -- crop, background,
+  // text styling/position, none of it tied to this specific clip's timeline
+  // or duration (see templateEditSchema in shared/validation.mjs).
+  async function saveAsTemplate() {
+    setVideoMenuOpen(false);
+    const name = prompt("Name this template:");
+    if (!name?.trim()) return;
+    try {
+      await api("/templates", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          edit: {
+            canvas: edit.canvas,
+            crop: edit.crop,
+            textOverlays: edit.textOverlays.map(
+              ({ startMs, endMs, ...rest }) => rest,
+            ),
+          },
+        }),
+      });
+    } catch (e: any) {
+      onError(e.message);
+    }
+  }
   function updateOverlay(id: string, changes: Partial<Overlay>) {
     change({
       ...edit,
@@ -1560,6 +1585,9 @@ export default function Editor({
           >
             <button className="wide subtle" onClick={openMediaPicker}>
               <RefreshCw size={16} /> Replace video from Media
+            </button>
+            <button className="wide subtle" onClick={saveAsTemplate}>
+              <Save size={16} /> Save as template
             </button>
             <button
               className="wide subtle danger"

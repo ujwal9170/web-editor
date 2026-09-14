@@ -6,6 +6,8 @@ import path from "node:path";
 import {
   initialEdit,
   validateEdit,
+  validateTemplate,
+  editFromTemplate,
   instagramUrl,
   videoLink,
 } from "../shared/validation.mjs";
@@ -170,6 +172,48 @@ test("edit validation rejects out-of-bounds crops, overlaps and an empty timelin
       10000,
     ),
   );
+});
+test("a template carries crop/background/text but never timing or audio", () => {
+  const edit = {
+    ...initialEdit(10000),
+    crop: { x: 0.1, y: 0.2, width: 0.6, height: 0.5, offsetX: 0.3 },
+    textOverlays: [
+      {
+        id: "a",
+        text: "hi",
+        font: "Inter",
+        color: "#FFFFFF",
+        size: 40,
+        x: 0.5,
+        y: 0.1,
+        startMs: 1000,
+        endMs: 4000,
+      },
+    ],
+  };
+  // A template is only the reusable subset -- passing the full edit
+  // (segments/audio included) still validates, since those extra keys are
+  // simply not part of the schema and get stripped, not rejected.
+  const templateEdit = validateTemplate({
+    canvas: edit.canvas,
+    crop: edit.crop,
+    textOverlays: edit.textOverlays.map(
+      ({ startMs, endMs, ...rest }) => rest,
+    ),
+  });
+  assert.equal(templateEdit.textOverlays[0].startMs, undefined);
+  assert.deepEqual(templateEdit.crop, edit.crop);
+
+  const applied = editFromTemplate(templateEdit, 8000);
+  assert.deepEqual(applied.crop, edit.crop);
+  assert.deepEqual(applied.segments, [
+    { startMs: 0, endMs: 8000, enabled: true },
+  ]);
+  assert.equal(applied.textOverlays[0].startMs, 0);
+  assert.equal(applied.textOverlays[0].endMs, 8000);
+  assert.equal(applied.audio.mode, "original");
+  // The result is itself a valid, fully-formed edit for the new duration.
+  assert.deepEqual(validateEdit(applied, 8000), applied);
 });
 test("repository persists records across restarts", () => {
   const root = mkdtempSync(path.join(tmpdir(), "frame-test-"));

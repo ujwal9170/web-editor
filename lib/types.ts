@@ -42,6 +42,17 @@ export type Edit = {
   textOverlays: Overlay[];
   audio: { mode: string; derivativeId: string | null };
 };
+// Reusable style preset: crop/background/text, no timing or a specific clip.
+export type Template = {
+  id: string;
+  name: string;
+  edit: {
+    canvas: Edit["canvas"];
+    crop: Edit["crop"];
+    textOverlays: Omit<Overlay, "startMs" | "endMs">[];
+  };
+  createdAt: number;
+};
 export type Project = {
   id: string;
   mediaId: string;

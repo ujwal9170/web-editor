@@ -1003,6 +1003,24 @@ header {
 .media-picker-item:disabled {
   opacity: 0.5;
 }
+.grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.template-swatch {
+  display: flex;
+  align-items: flex-end;
+  padding: 12px;
+}
+.template-card-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: #fff;
+  text-shadow: 0 1px 4px #0008;
+}
 .check {
   display: flex;
   align-items: center;
