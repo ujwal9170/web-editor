@@ -1,3 +1,4 @@
+import { cropGeometry } from "../shared/export.mjs";
 import type { Edit, Overlay } from "./types";
 export const fonts = ["Inter", "DM Sans", "Montserrat", "Roboto"];
 export const textColors = [
@@ -14,7 +15,18 @@ export function dimensions(
 ): [number, number] {
   return quality === "720p" ? [720, 1280] : [1080, 1920];
 }
-export type Crop = { x: number; y: number; width: number; height: number };
+export type Crop = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  // Position of the visible window within the crop, once it's scaled to
+  // cover the canvas -- see cropGeometry() in shared/export.mjs. Optional so
+  // literals like { x: 0, y: 0, width: 1, height: 1 } stay valid; every
+  // consumer falls back to 0.5 (centered) when absent.
+  panX?: number;
+  panY?: number;
+};
 // Smallest fraction of the source either dimension may keep -- below this a
 // drag handle or a symmetric slider could invert or zero out the crop.
 export const MIN_CROP = 0.08;
@@ -27,18 +39,6 @@ export function clampCrop(crop: Crop): Crop {
     x: Math.min(1 - width, Math.max(0, crop.x)),
     y: Math.min(1 - height, Math.max(0, crop.y)),
   };
-}
-// The fixed factor compose() scales the *full, uncropped* source by to fit
-// the canvas -- shared so a screen-pixel drag (e.g. repositioning a crop
-// vertically) can be converted to the same source-fraction units without
-// drifting from what actually gets drawn.
-export function fitScale(
-  canvasWidth: number,
-  canvasHeight: number,
-  sourceWidth: number,
-  sourceHeight: number,
-) {
-  return Math.min(canvasWidth / sourceWidth, canvasHeight / sourceHeight);
 }
 export type Context2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 export function background(
@@ -121,37 +121,17 @@ export function compose(
 ) {
   background(ctx, edit, width, height);
   if (frame && sourceWidth && sourceHeight) {
-    const c = edit.crop,
-      sw = Math.max(2, Math.floor((sourceWidth * c.width) / 2) * 2),
-      sh = Math.max(2, Math.floor((sourceHeight * c.height) / 2) * 2);
-    const sx = Math.min(
-        sourceWidth - sw,
-        Math.floor((sourceWidth * c.x) / 2) * 2,
-      ),
-      sy = Math.min(
-        sourceHeight - sh,
-        Math.floor((sourceHeight * c.y) / 2) * 2,
-      );
-    // Scale/position come from fitting the FULL, uncropped source -- not the
-    // cropped region -- so the crop is a stable window into a frame that
-    // never itself rescales or reflows. Moving one edge only reveals or
-    // hides background at that edge; every untouched edge stays exactly
-    // where it was. worker/media.py's render() mirrors this exactly.
-    const scale = fitScale(width, height, sourceWidth, sourceHeight);
-    const baseX = (width - sourceWidth * scale) / 2,
-      baseY = (height - sourceHeight * scale) / 2;
-    const w = Math.floor((sw * scale) / 2) * 2,
-      h = Math.floor((sh * scale) / 2) * 2;
+    const g = cropGeometry(edit.crop, sourceWidth, sourceHeight, width, height);
     ctx.drawImage(
       frame,
-      sx,
-      sy,
-      sw,
-      sh,
-      baseX + sx * scale,
-      baseY + sy * scale,
-      w,
-      h,
+      g.left,
+      g.top,
+      g.width,
+      g.height,
+      g.drawX,
+      g.drawY,
+      g.drawWidth,
+      g.drawHeight,
     );
   }
   edit.textOverlays

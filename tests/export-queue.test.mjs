@@ -3,27 +3,73 @@ import assert from "node:assert/strict";
 import { createExportQueue } from "../lib/exportQueue.mjs";
 import { cropGeometry, exportTimeline, frameTimes } from "../shared/export.mjs";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-test("device crop follows latest stable-window positioning at both resolutions", () => {
+test("a crop always covers the canvas exactly, at both resolutions", () => {
   for (const width of [720, 1080]) {
     const height = (width * 16) / 9;
     const full = cropGeometry(
-      { x: 0, y: 0, width: 1, height: 1 },
+      { x: 0, y: 0, width: 1, height: 1, panX: 0.5, panY: 0.5 },
       1920,
       1080,
       width,
       height,
     );
-    const left = cropGeometry(
-      { x: 0.25, y: 0, width: 0.75, height: 1 },
+    const narrow = cropGeometry(
+      { x: 0.25, y: 0, width: 0.5, height: 1, panX: 0.5, panY: 0.5 },
       1920,
       1080,
       width,
       height,
     );
-    assert.equal(left.drawX + left.drawWidth, full.drawX + full.drawWidth);
-    assert.equal(left.drawY, full.drawY);
-    assert.equal(left.drawHeight, full.drawHeight);
+    // A crop never leaves any background showing through it -- the visible
+    // window always draws edge-to-edge, whatever the selection.
+    for (const g of [full, narrow]) {
+      assert.equal(g.drawX, 0);
+      assert.equal(g.drawY, 0);
+      assert.equal(g.drawWidth, width);
+      assert.equal(g.drawHeight, height);
+    }
+    // The default (untouched) selection already covers a 16:9 source into
+    // this 9:16 canvas by cropping its width down -- horizontal slack to
+    // pan through, none vertically.
+    assert.ok(full.width < 1920);
+    assert.equal(full.height, 1080);
+    // An explicit, narrower crop covers just the remainder -- its visible
+    // window can never reach outside the selected half.
+    assert.ok(narrow.left >= 1920 * 0.25 - 1);
+    assert.ok(narrow.left + narrow.width <= 1920 * 0.75 + 1);
   }
+});
+test("panning slides the visible window through a crop's overflow, not past it", () => {
+  const width = 1080,
+    height = 1920;
+  const centered = cropGeometry(
+    { x: 0, y: 0, width: 1, height: 1, panX: 0.5, panY: 0.5 },
+    1920,
+    1080,
+    width,
+    height,
+  );
+  const atStart = cropGeometry(
+    { x: 0, y: 0, width: 1, height: 1, panX: 0, panY: 0.5 },
+    1920,
+    1080,
+    width,
+    height,
+  );
+  const atEnd = cropGeometry(
+    { x: 0, y: 0, width: 1, height: 1, panX: 1, panY: 0.5 },
+    1920,
+    1080,
+    width,
+    height,
+  );
+  assert.equal(atStart.left, 0);
+  assert.equal(atEnd.left + atEnd.width, 1920);
+  assert.ok(centered.left > atStart.left && centered.left < atEnd.left);
+  // Only the axis with overflow moves -- this source fills height exactly,
+  // so panY has nothing to slide through.
+  assert.equal(atStart.top, centered.top);
+  assert.equal(atStart.height, centered.height);
 });
 test("cuts share one output frame grid and never include the removed middle", () => {
   const { ranges, duration } = exportTimeline([

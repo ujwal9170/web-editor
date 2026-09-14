@@ -20,7 +20,18 @@ export const editSchema = z.object({
     }),
   }),
   crop: z
-    .object({ x: unit, y: unit, width: unit.gt(0), height: unit.gt(0) })
+    .object({
+      x: unit,
+      y: unit,
+      width: unit.gt(0),
+      height: unit.gt(0),
+      // Position of the visible window within the cropped selection, once
+      // that selection is scaled to cover the canvas -- see
+      // shared/export.mjs's cropGeometry(). 0.5 is centered; defaulted so
+      // edits saved before this field existed still parse.
+      panX: unit.default(0.5),
+      panY: unit.default(0.5),
+    })
     .refine(
       (c) => c.x + c.width <= 1.001 && c.y + c.height <= 1.001,
       "Crop exceeds source bounds",
@@ -152,7 +163,7 @@ export function initialEdit(durationMs) {
       aspectRatio: "9:16",
       background: { type: "solid", colors: ["#111827", "#7C3AED"], angle: 135 },
     },
-    crop: { x: 0, y: 0, width: 1, height: 1 },
+    crop: { x: 0, y: 0, width: 1, height: 1, panX: 0.5, panY: 0.5 },
     segments: [{ startMs: 0, endMs: durationMs, enabled: true }],
     textOverlays: [],
     audio: { mode: "original", derivativeId: null },

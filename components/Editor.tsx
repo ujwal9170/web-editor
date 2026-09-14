@@ -36,7 +36,6 @@ import {
   clampCrop,
   MIN_CROP,
   measureOverlay,
-  fitScale,
   type Crop as CropRect,
 } from "@/lib/canvas";
 import type { Edit, Overlay, Project } from "@/lib/types";
@@ -89,20 +88,24 @@ export default function Editor({
     derived = useRef<HTMLAudioElement>(null),
     canvas = useRef<HTMLCanvasElement>(null),
     textFrame = useRef<HTMLDivElement>(null),
-    panGuide = useRef<HTMLSpanElement>(null),
+    panGuideX = useRef<HTMLSpanElement>(null),
+    panGuideY = useRef<HTMLSpanElement>(null),
     current = useRef(edit),
     revision = useRef(initial.revision),
     saveChain = useRef<Promise<any>>(Promise.resolve()),
     abort = useRef<AbortController | null>(null),
     alive = useRef(true);
-  // Live vertical-reposition drag on the composited preview (see panDown
-  // below). Kept off React state entirely -- read straight from the draw
-  // loop -- so 60fps pointermove never touches the undo stack or autosave;
-  // only pointerup commits a single change().
-  const liveCropY = useRef<number | null>(null),
+  // Live reposition drag on the composited preview (see panDown below).
+  // Kept off React state entirely -- read straight from the draw loop -- so
+  // 60fps pointermove never touches the undo stack or autosave; only
+  // pointerup commits a single change().
+  const liveCropPan = useRef<{ x: number; y: number } | null>(null),
     panDrag = useRef<{
+      startX: number;
       startY: number;
-      startCropY: number;
+      startPanX: number;
+      startPanY: number;
+      boxWidthPx: number;
       boxHeightPx: number;
       moved: boolean;
     } | null>(null);
@@ -244,7 +247,8 @@ export default function Editor({
   }, [edit, name, caption]); // Serialized saves prevent overlapping revision writes.
   useEffect(() => {
     let frame: number;
-    let lastEdit: Edit | null = null, lastTime = -1, lastDraw = 0, lastReady = -1, lastCropY: number | null = null;
+    let lastEdit: Edit | null = null, lastTime = -1, lastDraw = 0, lastReady = -1;
+    let lastPanX: number | null = null, lastPanY: number | null = null;
     const draw = () => {
       const v = video.current,
         ctx = canvas.current?.getContext("2d");
@@ -268,26 +272,32 @@ export default function Editor({
           }
         }
         const now = performance.now();
+        const livePan = liveCropPan.current;
         if (
           now - lastDraw >= 32 &&
           (lastEdit !== current.current ||
             lastTime !== v.currentTime ||
             lastReady !== v.readyState ||
-            lastCropY !== liveCropY.current)
+            lastPanX !== livePan?.x ||
+            lastPanY !== livePan?.y)
         ) {
-          const drawEdit =
-            liveCropY.current != null
-              ? {
-                  ...current.current,
-                  crop: { ...current.current.crop, y: liveCropY.current },
-                }
-              : current.current;
+          const drawEdit = livePan
+            ? {
+                ...current.current,
+                crop: {
+                  ...current.current.crop,
+                  panX: livePan.x,
+                  panY: livePan.y,
+                },
+              }
+            : current.current;
           preview(ctx, v, drawEdit);
           lastDraw = now;
           lastEdit = current.current;
           lastTime = v.currentTime;
           lastReady = v.readyState;
-          lastCropY = liveCropY.current;
+          lastPanX = livePan?.x ?? null;
+          lastPanY = livePan?.y ?? null;
         }
       }
       frame = requestAnimationFrame(draw);
@@ -319,53 +329,105 @@ export default function Editor({
       setPlaying(false);
     }
   }
-  // Reposition the crop vertically by dragging directly on the composited
-  // preview -- distinct from Free hand's edge handles (which resize the
-  // crop): this only ever translates it, x/width/height untouched. A screen
-  // pixel is converted to source-height fraction through the same fixed
-  // scale compose() draws with (fitScale), so the drag tracks 1:1 with the
-  // video regardless of how much is currently cropped. Eases toward a
-  // vertically-centered crop the closer a drag gets to center, without ever
-  // hard-locking there -- the source position always stays a free blend of
-  // the raw pointer position and center, so it can still be dragged away.
+  // Reposition the crop by dragging directly on the composited preview --
+  // distinct from Free hand's edge handles (which resize the crop): this
+  // only ever slides the visible window through it, x/y/width/height
+  // untouched. The crop always discards everything outside the selection --
+  // what's left is scaled to cover the canvas completely (see cropGeometry()
+  // in shared/export.mjs), so panning only has room to move on whichever
+  // axis that cover-scale leaves overflow on; the other axis simply has
+  // nothing to drag. Eases toward centered (0.5) the closer a drag gets,
+  // without ever hard-locking there -- the position always stays a free
+  // blend of the raw pointer position and center, so it can still be
+  // dragged away.
   function panDown(e: ReactPointerEvent<HTMLDivElement>) {
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = e.currentTarget.getBoundingClientRect();
     panDrag.current = {
+      startX: e.clientX,
       startY: e.clientY,
-      startCropY: edit.crop.y,
+      startPanX: edit.crop.panX ?? 0.5,
+      startPanY: edit.crop.panY ?? 0.5,
+      boxWidthPx: rect.width,
       boxHeightPx: rect.height,
       moved: false,
     };
   }
+  function easePan(raw: number) {
+    const dist = Math.abs(raw - 0.5),
+      snapZone = 0.12,
+      pull = dist < snapZone ? (1 - dist / snapZone) ** 2 * 0.7 : 0;
+    return { value: raw + (0.5 - raw) * pull, near: dist < snapZone };
+  }
   function panMove(e: ReactPointerEvent<HTMLDivElement>) {
     const d = panDrag.current;
-    if (!d || d.boxHeightPx <= 0 || !media.width || !media.height) return;
-    const pixelDy = e.clientY - d.startY;
-    if (!d.moved && Math.abs(pixelDy) < TAP_THRESHOLD) return;
+    if (!d || d.boxWidthPx <= 0 || d.boxHeightPx <= 0 || !media.width || !media.height)
+      return;
+    const pixelDx = e.clientX - d.startX,
+      pixelDy = e.clientY - d.startY;
+    if (
+      !d.moved &&
+      Math.abs(pixelDx) < TAP_THRESHOLD &&
+      Math.abs(pixelDy) < TAP_THRESHOLD
+    )
+      return;
     d.moved = true;
     const [canvasWidth, canvasHeight] = dimensions(edit.canvas.aspectRatio);
-    const scale = fitScale(canvasWidth, canvasHeight, media.width, media.height);
-    const fractionPerPx = canvasHeight / (d.boxHeightPx * scale * media.height);
-    const height = edit.crop.height;
-    const raw = Math.min(
-      1 - height,
-      Math.max(0, d.startCropY + pixelDy * fractionPerPx),
-    );
-    const centerY = (1 - height) / 2,
-      panRange = Math.max(0.0001, 1 - height),
-      snapZone = Math.min(0.06, panRange * 0.5),
-      dist = Math.abs(raw - centerY),
-      pull = dist < snapZone ? (1 - dist / snapZone) ** 2 * 0.7 : 0;
-    liveCropY.current = raw + (centerY - raw) * pull;
-    if (panGuide.current)
-      panGuide.current.style.opacity = dist < snapZone ? "1" : "0";
+    const c = edit.crop;
+    const sw = Math.max(2, Math.floor((media.width * c.width) / 2) * 2),
+      sh = Math.max(2, Math.floor((media.height * c.height) / 2) * 2);
+    // Same cover scale cropGeometry() computes from this crop selection.
+    const scale = Math.max(canvasWidth / sw, canvasHeight / sh);
+    const slackW = Math.max(0, sw - canvasWidth / scale),
+      slackH = Math.max(0, sh - canvasHeight / scale);
+    const unitsPerPxX = canvasWidth / d.boxWidthPx,
+      unitsPerPxY = canvasHeight / d.boxHeightPx;
+    // Dragging the content right/down means sampling further left/up in the
+    // source, hence the minus -- see the direction derivation in panMove's
+    // history for why.
+    const rawX =
+      slackW > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              d.startPanX - (pixelDx * unitsPerPxX) / scale / slackW,
+            ),
+          )
+        : 0.5;
+    const rawY =
+      slackH > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              d.startPanY - (pixelDy * unitsPerPxY) / scale / slackH,
+            ),
+          )
+        : 0.5;
+    const easedX = slackW > 0 ? easePan(rawX) : { value: 0.5, near: false },
+      easedY = slackH > 0 ? easePan(rawY) : { value: 0.5, near: false };
+    liveCropPan.current = { x: easedX.value, y: easedY.value };
+    // The X guide is a vertical line shown while Y is near center (and vice
+    // versa) -- each marks the axis currently aligned, like a crosshair.
+    if (panGuideY.current)
+      panGuideY.current.style.opacity = easedX.near ? "1" : "0";
+    if (panGuideX.current)
+      panGuideX.current.style.opacity = easedY.near ? "1" : "0";
   }
   function panUp() {
-    if (panDrag.current?.moved && liveCropY.current != null)
-      change({ ...edit, crop: { ...edit.crop, y: liveCropY.current } });
-    if (panGuide.current) panGuide.current.style.opacity = "0";
-    liveCropY.current = null;
+    if (panDrag.current?.moved && liveCropPan.current)
+      change({
+        ...edit,
+        crop: {
+          ...edit.crop,
+          panX: liveCropPan.current.x,
+          panY: liveCropPan.current.y,
+        },
+      });
+    if (panGuideX.current) panGuideX.current.style.opacity = "0";
+    if (panGuideY.current) panGuideY.current.style.opacity = "0";
+    liveCropPan.current = null;
     panDrag.current = null;
   }
   function split() {
@@ -604,7 +666,8 @@ export default function Editor({
                 onPointerUp={panUp}
                 onPointerCancel={panUp}
               >
-                <span className="crop-pan-guide" ref={panGuide} />
+                <span className="crop-pan-guide-x" ref={panGuideX} />
+                <span className="crop-pan-guide-y" ref={panGuideY} />
               </div>
             )}
             {tab === "text" && (
@@ -932,7 +995,7 @@ export default function Editor({
                   onClick={() =>
                     change({
                       ...edit,
-                      crop: { x: 0, y: 0, width: 1, height: 1 },
+                      crop: { x: 0, y: 0, width: 1, height: 1, panX: 0.5, panY: 0.5 },
                     })
                   }
                 >

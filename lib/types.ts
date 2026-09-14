@@ -30,7 +30,14 @@ export type Edit = {
     aspectRatio: "9:16";
     background: { type: string; colors: string[]; angle: number };
   };
-  crop: { x: number; y: number; width: number; height: number };
+  crop: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    panX?: number;
+    panY?: number;
+  };
   segments: Segment[];
   textOverlays: Overlay[];
   audio: { mode: string; derivativeId: string | null };

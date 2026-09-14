@@ -218,23 +218,31 @@ def render(job, root):
         args += ['-i', str(root / job['audioFile'])]
         audio_input = str(len(overlays) + 2) + ':a'
     c = spec['crop']
-    cw = max(2, int(info['width'] * c['width']) // 2 * 2)
-    ch = max(2, int(info['height'] * c['height']) // 2 * 2)
-    cx = min(info['width'] - cw, int(info['width'] * c['x']) // 2 * 2)
-    cy = min(info['height'] - ch, int(info['height'] * c['y']) // 2 * 2)
-    # Scale/position come from fitting the FULL, uncropped source -- not the
-    # cropped region -- so the crop is a stable window into a frame that
-    # never itself rescales or reflows. Moving one edge only reveals or hides
-    # background at that edge; every untouched edge stays exactly where it
-    # was. Mirrors lib/canvas.ts's compose() exactly, so preview, on-device
-    # export and this server render all agree pixel-for-pixel.
-    scale = min(width / info['width'], height / info['height'])
-    base_x = (width - info['width'] * scale) / 2
-    base_y = (height - info['height'] * scale) / 2
-    dw = max(2, round(cw * scale) // 2 * 2)
-    dh = max(2, round(ch * scale) // 2 * 2)
-    dx = round(base_x + cx * scale)
-    dy = round(base_y + cy * scale)
+    sw = max(2, int(info['width'] * c['width']) // 2 * 2)
+    sh = max(2, int(info['height'] * c['height']) // 2 * 2)
+    crop_left = min(info['width'] - sw, int(info['width'] * c['x']) // 2 * 2)
+    crop_top = min(info['height'] - sh, int(info['height'] * c['y']) // 2 * 2)
+    # The crop actually discards everything outside the selection: what's
+    # left is scaled to cover the canvas completely, like a standard photo/
+    # video crop-and-position tool -- a crop never leaves background showing
+    # through it. Panning (panX/panY, 0.5 = centered) then slides the visible
+    # window through whatever overflow that cover-scale leaves on one axis.
+    # Mirrors lib/canvas.ts's compose() and shared/export.mjs's
+    # cropGeometry() exactly, so preview, on-device export and this server
+    # render all agree pixel-for-pixel.
+    scale = max(width / sw, height / sh)
+    visible_w = min(sw, round(width / scale) // 2 * 2)
+    visible_h = min(sh, round(height / scale) // 2 * 2)
+    pan_x = c.get('panX', 0.5)
+    pan_y = c.get('panY', 0.5)
+    cx = crop_left + round((sw - visible_w) * pan_x) // 2 * 2
+    cy = crop_top + round((sh - visible_h) * pan_y) // 2 * 2
+    cw = visible_w
+    ch = visible_h
+    dw = width
+    dh = height
+    dx = 0
+    dy = 0
     filters = [f'[0:v]crop={cw}:{ch}:{cx}:{cy},scale={dw}:{dh},setsar=1,fps=30[video]', f'[1:v]fps=30,setsar=1[bg]', f'[bg][video]overlay={dx}:{dy}:shortest=1[base0]']
     chain, previous = overlay_filters(overlays)
     filters += chain

@@ -1121,25 +1121,35 @@ header {
 .crop-pan-frame {
   pointer-events: auto;
   touch-action: none;
-  cursor: grab;
+  cursor: move;
 }
 .crop-pan-frame:active {
   cursor: grabbing;
 }
-/* Center alignment guide: hidden by default, faded in imperatively (see
-   Editor.tsx panMove) while a vertical drag is within the magnetic zone --
-   kept off React state so it can update every pointermove without a
-   re-render. */
-.crop-pan-guide {
+/* Center alignment guides: hidden by default, faded in imperatively (see
+   Editor.tsx panMove) while a drag is within the magnetic zone on that
+   axis -- kept off React state so they can update every pointermove
+   without a re-render. The X guide is a vertical line (marks horizontal
+   centering) and vice versa, like a crosshair. */
+.crop-pan-guide-x,
+.crop-pan-guide-y {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 2px;
   background: var(--accent);
   opacity: 0;
   transition: opacity 0.15s;
   pointer-events: none;
+}
+.crop-pan-guide-x {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+}
+.crop-pan-guide-y {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
 }
 .crop-frame {
   position: absolute;

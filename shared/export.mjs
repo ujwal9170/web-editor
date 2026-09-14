@@ -43,28 +43,43 @@ export function* frameTimes(ranges, duration, fps = 30) {
   }
 }
 
+// The crop actually discards everything outside the selection: what's left
+// is scaled to cover the canvas completely, like a standard photo/video
+// crop-and-position tool -- a crop never leaves background showing through
+// it. Panning (panX/panY, each 0..1, 0.5 = centered) then slides the
+// visible window through whatever overflow that cover-scale leaves on one
+// axis (cover-fit always leaves slack on at most one of the two axes).
+// Mirrors lib/canvas.ts's compose() and worker/media.py's render() exactly,
+// so preview, on-device export and the server render all agree
+// pixel-for-pixel.
 export function cropGeometry(crop, sourceWidth, sourceHeight, width, height) {
   const sw = Math.max(2, Math.floor((sourceWidth * crop.width) / 2) * 2);
   const sh = Math.max(2, Math.floor((sourceHeight * crop.height) / 2) * 2);
-  const left = Math.max(
+  const cropLeft = Math.max(
     0,
     Math.min(sourceWidth - sw, Math.floor((sourceWidth * crop.x) / 2) * 2),
   );
-  const top = Math.max(
+  const cropTop = Math.max(
     0,
     Math.min(sourceHeight - sh, Math.floor((sourceHeight * crop.y) / 2) * 2),
   );
-  // Match the latest stable-window crop: fit the full source, then hide its
-  // cropped edges without enlarging or re-centering the remaining pixels.
-  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const scale = Math.max(width / sw, height / sh);
+  const visibleWidth = Math.min(sw, Math.round(width / scale / 2) * 2);
+  const visibleHeight = Math.min(sh, Math.round(height / scale / 2) * 2);
+  const panX = crop.panX ?? 0.5,
+    panY = crop.panY ?? 0.5;
+  const left =
+    cropLeft + Math.round(((sw - visibleWidth) * panX) / 2) * 2;
+  const top =
+    cropTop + Math.round(((sh - visibleHeight) * panY) / 2) * 2;
   return {
     left,
     top,
-    width: sw,
-    height: sh,
-    drawX: (width - sourceWidth * scale) / 2 + left * scale,
-    drawY: (height - sourceHeight * scale) / 2 + top * scale,
-    drawWidth: Math.max(2, Math.floor((sw * scale) / 2) * 2),
-    drawHeight: Math.max(2, Math.floor((sh * scale) / 2) * 2),
+    width: visibleWidth,
+    height: visibleHeight,
+    drawX: 0,
+    drawY: 0,
+    drawWidth: width,
+    drawHeight: height,
   };
 }
