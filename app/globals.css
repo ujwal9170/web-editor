@@ -873,7 +873,9 @@ header {
   inset: 0;
   background: #000a;
   backdrop-filter: blur(6px);
-  z-index: 10;
+  /* Above the editor's own floating chrome (.tool-tabs at 20,
+     .device-export-queue at 45) -- a dialog must always sit on top. */
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -950,6 +952,56 @@ header {
 .modal form > .primary {
   width: 100%;
   margin-top: 18px;
+}
+.video-menu {
+  width: 340px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.video-menu button {
+  justify-content: flex-start;
+  min-height: 50px;
+}
+.danger {
+  color: #ff8080;
+}
+.media-picker {
+  width: 480px;
+}
+.media-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 16px 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.media-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.media-picker-item img {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--raised);
+}
+.media-picker-item span {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-picker-item:disabled {
+  opacity: 0.5;
 }
 .check {
   display: flex;

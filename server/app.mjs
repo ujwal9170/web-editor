@@ -586,14 +586,17 @@ export async function createApp({
     return { ...project, media };
   });
   app.patch("/api/projects/:id", (req) => {
-    const item = get("project", req.params.id, req),
-      media = mediaReady(item.mediaId, req);
+    const item = get("project", req.params.id, req);
     const data = z
       .object({
         name: z.string().min(1).max(200),
         caption: z.string().max(8000),
         revision: z.number().int(),
         edit: z.unknown(),
+        // Swaps which source this project edits, keeping the same edit
+        // (crop/text/background/segments) applied to it. Optional: absent
+        // means "same media as before."
+        mediaId: z.string().optional(),
       })
       .parse(req.body);
     if (data.revision !== item.revision)
@@ -603,18 +606,21 @@ export async function createApp({
         ),
         { statusCode: 409 },
       );
+    const media = mediaReady(data.mediaId ?? item.mediaId, req);
     const edit = validateEdit(data.edit, media.duration * 1000);
     if (edit.audio.derivativeId) {
       const a = get("audio", edit.audio.derivativeId, req);
       if (a.projectId !== item.id || a.status !== "ready")
         throw new Error("Audio is not ready for this project.");
     }
-    return repo.put("project", {
+    const saved = repo.put("project", {
       ...item,
       ...data,
+      mediaId: media.id,
       edit,
       revision: item.revision + 1,
     });
+    return { ...saved, media };
   });
   app.post(
     "/api/projects/:id/audio",

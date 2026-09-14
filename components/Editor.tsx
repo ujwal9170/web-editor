@@ -25,6 +25,7 @@ import {
   Grid3x3,
   RotateCcw,
   Check,
+  RefreshCw,
 } from "lucide-react";
 import { api, fileUrl, clock, awaitJob } from "@/lib/api";
 import { cropGeometry } from "@/shared/export.mjs";
@@ -39,7 +40,7 @@ import {
   measureOverlay,
   type Crop as CropRect,
 } from "@/lib/canvas";
-import type { Edit, Overlay, Project } from "@/lib/types";
+import type { Edit, Media, Overlay, Project } from "@/lib/types";
 import type { ExportTask } from "@/lib/useDeviceExports";
 
 export default function Editor({
@@ -48,12 +49,14 @@ export default function Editor({
   onQueue,
   onSaved,
   onBack,
+  onDelete,
 }: {
   initial: Project;
   onError: (e: string) => void;
   onQueue: (task: ExportTask) => Promise<void>;
   onSaved: (p: Project) => void;
   onBack?: () => void;
+  onDelete?: () => void;
 }) {
   const [edit, setEdit] = useState<Edit>(initial.edit),
     [name, setName] = useState(initial.name),
@@ -84,13 +87,18 @@ export default function Editor({
       x: number;
       y: number;
     } | null>(null),
-    [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+    [selectedTextId, setSelectedTextId] = useState<string | null>(null),
+    [videoMenuOpen, setVideoMenuOpen] = useState(false),
+    [mediaPicker, setMediaPicker] = useState<Media[] | null>(null),
+    [replacing, setReplacing] = useState(false);
   const video = useRef<HTMLVideoElement>(null),
     derived = useRef<HTMLAudioElement>(null),
     canvas = useRef<HTMLCanvasElement>(null),
     textFrame = useRef<HTMLDivElement>(null),
     panGuideX = useRef<HTMLSpanElement>(null),
     panGuideY = useRef<HTMLSpanElement>(null),
+    longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
+    longPressStart = useRef<{ x: number; y: number } | null>(null),
     current = useRef(edit),
     revision = useRef(initial.revision),
     saveChain = useRef<Promise<any>>(Promise.resolve()),
@@ -197,6 +205,50 @@ export default function Editor({
     setLiveTextPos(null);
     setSelectedTextId(null);
   }
+  // Long-press on the video opens a small "delete or replace this clip"
+  // menu. Lives on the preview stage itself (bubble phase), same as the
+  // outside-tap-close handler above -- so it naturally doesn't fire when
+  // the press starts on an interactive child that already stops
+  // propagation (crop-pan drag target, text handles, freehand's own
+  // handles), since a long-press there is that tool's own gesture, not a
+  // request to manage the video itself.
+  const LONG_PRESS_MS = 550,
+    LONG_PRESS_MOVE_TOLERANCE = 10;
+  function startLongPress(e: ReactPointerEvent<HTMLDivElement>) {
+    longPressStart.current = { x: e.clientX, y: e.clientY };
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = setTimeout(() => {
+      longPressTimer.current = null;
+      setVideoMenuOpen(true);
+    }, LONG_PRESS_MS);
+  }
+  function moveLongPress(e: ReactPointerEvent<HTMLDivElement>) {
+    const start = longPressStart.current;
+    if (!start || !longPressTimer.current) return;
+    if (
+      Math.hypot(e.clientX - start.x, e.clientY - start.y) >
+      LONG_PRESS_MOVE_TOLERANCE
+    )
+      cancelLongPress();
+  }
+  function cancelLongPress() {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = null;
+    longPressStart.current = null;
+  }
+  async function openMediaPicker() {
+    setVideoMenuOpen(false);
+    try {
+      const all = await api<Media[]>("/media");
+      setMediaPicker(
+        all.filter(
+          (m) => m.id !== initial.media!.id && m.status === "ready",
+        ),
+      );
+    } catch (e: any) {
+      onError(e.message);
+    }
+  }
   function updateOverlay(id: string, changes: Partial<Overlay>) {
     change({
       ...edit,
@@ -260,6 +312,60 @@ export default function Editor({
       }
       throw e;
     });
+  }
+  // Swaps which source this project edits, keeping crop/text/background/
+  // segments applied to the new video. The processed audio stem (if any) is
+  // specific to the OLD source's audio, so it's dropped rather than
+  // silently applied to the wrong clip; segments are clamped to the new
+  // duration (or replaced with one full-length segment if none would
+  // survive that). onSaved's parent remounts the Editor fresh with the
+  // updated project (see app/page.tsx's key), so this doesn't need to keep
+  // the rest of this instance's state in sync afterward.
+  function replaceMedia(newMedia: Media) {
+    setReplacing(true);
+    const durationMs = newMedia.duration * 1000;
+    let segments = edit.segments
+      .filter((s) => s.startMs < durationMs)
+      .map((s) => ({ ...s, endMs: Math.min(s.endMs, durationMs) }));
+    if (!segments.length)
+      segments = [{ startMs: 0, endMs: durationMs, enabled: true }];
+    const carriedEdit: Edit = {
+      ...edit,
+      segments,
+      audio:
+        edit.audio.mode === "original"
+          ? edit.audio
+          : { mode: "original", derivativeId: null },
+    };
+    const snapshot = { edit: carriedEdit, name, caption };
+    const next = saveChain.current
+      .catch(() => {})
+      .then(async () => {
+        const p = await api<Project>(`/projects/${initial.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            ...snapshot,
+            revision: revision.current,
+            mediaId: newMedia.id,
+          }),
+        });
+        revision.current = p.revision;
+        committed.current = JSON.stringify(snapshot);
+        if (alive.current) {
+          setEdit(carriedEdit);
+          onSaved(p);
+        }
+        return p;
+      });
+    saveChain.current = next;
+    return next
+      .catch((e) => {
+        if (alive.current) onError(e.message);
+        throw e;
+      })
+      .finally(() => {
+        if (alive.current) setReplacing(false);
+      });
   }
   const first = useRef(true);
   useEffect(() => {
@@ -374,8 +480,13 @@ export default function Editor({
   function panDown(e: ReactPointerEvent<HTMLDivElement>) {
     // Stops the preview stage's own pointerdown (which closes the open
     // sheet on a tap outside it) from treating the start of a legitimate
-    // drag as an "outside" tap.
+    // drag as an "outside" tap. The crop-pan frame covers the video
+    // whenever the Crop tab is active (sheet open or not), which would
+    // otherwise block the video's own long-press menu entirely on the
+    // default tab -- so this also drives that same long-press timer;
+    // panMove cancels it the moment an actual drag is detected.
     e.stopPropagation();
+    startLongPress(e);
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = e.currentTarget.getBoundingClientRect();
     if (!videoRect) return;
@@ -398,6 +509,7 @@ export default function Editor({
     return { value: raw + (0.5 - raw) * pull, near: dist < snapZone };
   }
   function panMove(e: ReactPointerEvent<HTMLDivElement>) {
+    moveLongPress(e);
     const d = panDrag.current;
     if (!d || d.boxWidthPx <= 0 || d.boxHeightPx <= 0 || !videoRect) return;
     const pixelDx = e.clientX - d.startX,
@@ -442,6 +554,7 @@ export default function Editor({
       panGuideY.current.style.opacity = easedY.near ? "1" : "0";
   }
   function panUp() {
+    cancelLongPress();
     if (panDrag.current?.moved && liveOffset.current)
       change({
         ...edit,
@@ -633,7 +746,7 @@ export default function Editor({
         <div className="preview-column">
           <div
             className="preview-stage"
-            onPointerDown={() => {
+            onPointerDown={(e) => {
               // A tap anywhere on the stage that isn't an interactive
               // element itself (those stop propagation before this ever
               // runs -- text handles, the crop-pan drag target) closes
@@ -648,7 +761,11 @@ export default function Editor({
                 setSelectedTextId(null);
                 setLiveTextPos(null);
               }
+              startLongPress(e);
             }}
+            onPointerMove={moveLongPress}
+            onPointerUp={cancelLongPress}
+            onPointerCancel={cancelLongPress}
           >
             <canvas
               ref={canvas}
@@ -1428,6 +1545,90 @@ export default function Editor({
           className="menu-overlay"
           onClick={() => setExportMenuOpen(false)}
         />
+      )}
+      {videoMenuOpen && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setVideoMenuOpen(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="Video options"
+            className="modal video-menu"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button className="wide subtle" onClick={openMediaPicker}>
+              <RefreshCw size={16} /> Replace video from Media
+            </button>
+            <button
+              className="wide subtle danger"
+              onClick={() => {
+                setVideoMenuOpen(false);
+                onDelete?.();
+              }}
+            >
+              <Trash2 size={16} /> Delete this edit
+            </button>
+          </section>
+        </div>
+      )}
+      {mediaPicker && (
+        <div
+          className="modal-backdrop"
+          onClick={() => !replacing && setMediaPicker(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="Replace video"
+            className="modal media-picker"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>Replace with</h2>
+            <p className="hint">
+              Crop, text, background and cuts carry over. Applied audio
+              resets to original -- it was processed from the clip you're
+              replacing.
+            </p>
+            {mediaPicker.length === 0 ? (
+              <p className="empty">No other ready clips in Media yet.</p>
+            ) : (
+              <div className="media-picker-grid">
+                {mediaPicker.map((m) => (
+                  <button
+                    key={m.id}
+                    className="media-picker-item"
+                    disabled={replacing}
+                    onClick={async () => {
+                      try {
+                        await replaceMedia(m);
+                        setMediaPicker(null);
+                      } catch {
+                        // onError already surfaced it; keep the picker open.
+                      }
+                    }}
+                  >
+                    <img src={fileUrl("media", m.id, "thumbnail")} alt={m.name} />
+                    <span>{m.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {replacing && (
+              <p className="hint">
+                <LoaderCircle size={14} className="spin" /> Replacing…
+              </p>
+            )}
+            <button
+              className="wide subtle"
+              disabled={replacing}
+              onClick={() => setMediaPicker(null)}
+            >
+              Cancel
+            </button>
+          </section>
+        </div>
       )}
     </section>
   );

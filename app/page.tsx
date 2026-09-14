@@ -571,12 +571,18 @@ export default function Studio() {
           </section>
         ) : view === "editor" && project ? (
           <Editor
-            key={project.id}
+            // mediaId is in the key so replacing which video a project
+            // edits remounts the Editor fresh -- its internal state (edit,
+            // name, caption, revision, video/canvas refs) is only ever
+            // initialized once from `initial`, so a swap needs a clean
+            // instance rather than trying to reconcile everything live.
+            key={`${project.id}-${project.mediaId}`}
             initial={project}
             onError={setError}
             onQueue={deviceExports.enqueue}
             onSaved={(p) => setProject(p)}
             onBack={() => setProject(null)}
+            onDelete={() => deleteProject(project)}
           />
         ) : (
           <section className="library">
