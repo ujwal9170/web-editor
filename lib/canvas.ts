@@ -20,12 +20,10 @@ export type Crop = {
   y: number;
   width: number;
   height: number;
-  // Position of the visible window within the crop, once it's scaled to
-  // cover the canvas -- see cropGeometry() in shared/export.mjs. Optional so
-  // literals like { x: 0, y: 0, width: 1, height: 1 } stay valid; every
-  // consumer falls back to 0.5 (centered) when absent.
-  panX?: number;
-  panY?: number;
+  // Where the cropped rectangle draws on the canvas -- see cropGeometry()
+  // in shared/export.mjs. Absent means "wherever cropping alone implies."
+  offsetX?: number;
+  offsetY?: number;
 };
 // Smallest fraction of the source either dimension may keep -- below this a
 // drag handle or a symmetric slider could invert or zero out the crop.
@@ -34,6 +32,7 @@ export function clampCrop(crop: Crop): Crop {
   const width = Math.min(1, Math.max(MIN_CROP, crop.width)),
     height = Math.min(1, Math.max(MIN_CROP, crop.height));
   return {
+    ...crop,
     width,
     height,
     x: Math.min(1 - width, Math.max(0, crop.x)),

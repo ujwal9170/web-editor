@@ -35,8 +35,8 @@ export type Edit = {
     y: number;
     width: number;
     height: number;
-    panX?: number;
-    panY?: number;
+    offsetX?: number;
+    offsetY?: number;
   };
   segments: Segment[];
   textOverlays: Overlay[];

@@ -43,43 +43,49 @@ export function* frameTimes(ranges, duration, fps = 30) {
   }
 }
 
-// The crop actually discards everything outside the selection: what's left
-// is scaled to cover the canvas completely, like a standard photo/video
-// crop-and-position tool -- a crop never leaves background showing through
-// it. Panning (panX/panY, each 0..1, 0.5 = centered) then slides the
-// visible window through whatever overflow that cover-scale leaves on one
-// axis (cover-fit always leaves slack on at most one of the two axes).
+// crop.x/y/width/height are a source-selection concern ONLY -- which pixels
+// are kept, sized at a fixed scale (fitting the FULL, uncropped source) so
+// cropping never itself zooms. Where the resulting rectangle draws on the
+// canvas is a SEPARATE, independent concern: crop.offsetX/offsetY (0..1)
+// position it anywhere across the full canvas -- not just within whatever
+// room the crop selection's own source position happens to leave, which is
+// what made dragging feel like it was fighting the crop sliders instead of
+// freely moving an object. Left unset, offsetX/offsetY default to exactly
+// the position cropping alone would have given it (the edge(s) not cropped
+// stay put), so a fresh crop with no drag yet looks identical to before.
 // Mirrors lib/canvas.ts's compose() and worker/media.py's render() exactly,
 // so preview, on-device export and the server render all agree
 // pixel-for-pixel.
 export function cropGeometry(crop, sourceWidth, sourceHeight, width, height) {
   const sw = Math.max(2, Math.floor((sourceWidth * crop.width) / 2) * 2);
   const sh = Math.max(2, Math.floor((sourceHeight * crop.height) / 2) * 2);
-  const cropLeft = Math.max(
+  const left = Math.max(
     0,
     Math.min(sourceWidth - sw, Math.floor((sourceWidth * crop.x) / 2) * 2),
   );
-  const cropTop = Math.max(
+  const top = Math.max(
     0,
     Math.min(sourceHeight - sh, Math.floor((sourceHeight * crop.y) / 2) * 2),
   );
-  const scale = Math.max(width / sw, height / sh);
-  const visibleWidth = Math.min(sw, Math.round(width / scale / 2) * 2);
-  const visibleHeight = Math.min(sh, Math.round(height / scale / 2) * 2);
-  const panX = crop.panX ?? 0.5,
-    panY = crop.panY ?? 0.5;
-  const left =
-    cropLeft + Math.round(((sw - visibleWidth) * panX) / 2) * 2;
-  const top =
-    cropTop + Math.round(((sh - visibleHeight) * panY) / 2) * 2;
+  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const drawWidth = Math.max(2, Math.floor((sw * scale) / 2) * 2);
+  const drawHeight = Math.max(2, Math.floor((sh * scale) / 2) * 2);
+  const pinnedX = (width - sourceWidth * scale) / 2 + left * scale;
+  const pinnedY = (height - sourceHeight * scale) / 2 + top * scale;
+  const availX = Math.max(0, width - drawWidth);
+  const availY = Math.max(0, height - drawHeight);
+  const defaultOffsetX = availX > 0 ? pinnedX / availX : 0.5;
+  const defaultOffsetY = availY > 0 ? pinnedY / availY : 0.5;
+  const offsetX = Math.min(1, Math.max(0, crop.offsetX ?? defaultOffsetX));
+  const offsetY = Math.min(1, Math.max(0, crop.offsetY ?? defaultOffsetY));
   return {
     left,
     top,
-    width: visibleWidth,
-    height: visibleHeight,
-    drawX: 0,
-    drawY: 0,
-    drawWidth: width,
-    drawHeight: height,
+    width: sw,
+    height: sh,
+    drawX: availX * offsetX,
+    drawY: availY * offsetY,
+    drawWidth,
+    drawHeight,
   };
 }

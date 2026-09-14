@@ -3,73 +3,62 @@ import assert from "node:assert/strict";
 import { createExportQueue } from "../lib/exportQueue.mjs";
 import { cropGeometry, exportTimeline, frameTimes } from "../shared/export.mjs";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-test("a crop always covers the canvas exactly, at both resolutions", () => {
+test("device crop follows the stable-window fixed scale at both resolutions", () => {
   for (const width of [720, 1080]) {
     const height = (width * 16) / 9;
     const full = cropGeometry(
-      { x: 0, y: 0, width: 1, height: 1, panX: 0.5, panY: 0.5 },
+      { x: 0, y: 0, width: 1, height: 1 },
       1920,
       1080,
       width,
       height,
     );
-    const narrow = cropGeometry(
-      { x: 0.25, y: 0, width: 0.5, height: 1, panX: 0.5, panY: 0.5 },
+    const left = cropGeometry(
+      { x: 0.25, y: 0, width: 0.75, height: 1 },
       1920,
       1080,
       width,
       height,
     );
-    // A crop never leaves any background showing through it -- the visible
-    // window always draws edge-to-edge, whatever the selection.
-    for (const g of [full, narrow]) {
-      assert.equal(g.drawX, 0);
-      assert.equal(g.drawY, 0);
-      assert.equal(g.drawWidth, width);
-      assert.equal(g.drawHeight, height);
-    }
-    // The default (untouched) selection already covers a 16:9 source into
-    // this 9:16 canvas by cropping its width down -- horizontal slack to
-    // pan through, none vertically.
-    assert.ok(full.width < 1920);
-    assert.equal(full.height, 1080);
-    // An explicit, narrower crop covers just the remainder -- its visible
-    // window can never reach outside the selected half.
-    assert.ok(narrow.left >= 1920 * 0.25 - 1);
-    assert.ok(narrow.left + narrow.width <= 1920 * 0.75 + 1);
+    // Cropping the left edge only moves that edge -- the right edge (and
+    // the video's own on-screen scale) stays exactly where it was, never
+    // zooming or reflowing to fill the frame.
+    assert.equal(left.drawX + left.drawWidth, full.drawX + full.drawWidth);
+    assert.equal(left.drawY, full.drawY);
+    assert.equal(left.drawHeight, full.drawHeight);
   }
 });
-test("panning slides the visible window through a crop's overflow, not past it", () => {
+test("offsetX/offsetY reposition across the FULL canvas, independent of the crop selection", () => {
   const width = 1080,
     height = 1920;
-  const centered = cropGeometry(
-    { x: 0, y: 0, width: 1, height: 1, panX: 0.5, panY: 0.5 },
-    1920,
-    1080,
-    width,
-    height,
-  );
-  const atStart = cropGeometry(
-    { x: 0, y: 0, width: 1, height: 1, panX: 0, panY: 0.5 },
-    1920,
-    1080,
-    width,
-    height,
-  );
-  const atEnd = cropGeometry(
-    { x: 0, y: 0, width: 1, height: 1, panX: 1, panY: 0.5 },
-    1920,
-    1080,
-    width,
-    height,
-  );
-  assert.equal(atStart.left, 0);
-  assert.equal(atEnd.left + atEnd.width, 1920);
-  assert.ok(centered.left > atStart.left && centered.left < atEnd.left);
-  // Only the axis with overflow moves -- this source fills height exactly,
-  // so panY has nothing to slide through.
-  assert.equal(atStart.top, centered.top);
-  assert.equal(atStart.height, centered.height);
+  const crop = { x: 0, y: 0.3, width: 1, height: 0.4 };
+  const atStart = cropGeometry({ ...crop, offsetX: 0.5, offsetY: 0 }, 1920, 1080, width, height);
+  const atEnd = cropGeometry({ ...crop, offsetX: 0.5, offsetY: 1 }, 1920, 1080, width, height);
+  // offsetY alone reaches both canvas extremes, regardless of what the crop
+  // selection's own y happens to be -- the full canvas height, not just
+  // whatever room the crop's source position would have left.
+  assert.equal(atStart.drawY, 0);
+  assert.equal(atEnd.drawY + atEnd.drawHeight, height);
+  assert.equal(atStart.drawWidth, atEnd.drawWidth);
+  assert.equal(atStart.drawHeight, atEnd.drawHeight);
+});
+test("an unset offset defaults to exactly the position cropping alone implies", () => {
+  const width = 1080,
+    height = 1920,
+    sourceWidth = 1920,
+    sourceHeight = 1080;
+  const crop = { x: 0.25, y: 0.1, width: 0.5, height: 0.6 };
+  const result = cropGeometry(crop, sourceWidth, sourceHeight, width, height);
+  // Independently reproduce the old stable-window formula (fit the full,
+  // uncropped source, then offset by how far into it the crop starts) to
+  // confirm the unset-offset default still matches it exactly.
+  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const left = Math.floor((sourceWidth * crop.x) / 2) * 2;
+  const top = Math.floor((sourceHeight * crop.y) / 2) * 2;
+  const expectedDrawX = (width - sourceWidth * scale) / 2 + left * scale;
+  const expectedDrawY = (height - sourceHeight * scale) / 2 + top * scale;
+  assert.ok(Math.abs(result.drawX - expectedDrawX) < 1);
+  assert.ok(Math.abs(result.drawY - expectedDrawY) < 1);
 });
 test("cuts share one output frame grid and never include the removed middle", () => {
   const { ranges, duration } = exportTimeline([

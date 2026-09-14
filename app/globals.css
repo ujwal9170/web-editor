@@ -1103,11 +1103,12 @@ header {
 /* Free hand crop overlay: a bordered frame with a thirds grid and edge/corner
    drag handles, sized in the source video's own fractional coordinates so it
    lines up with the visible frame at any preview size. .text-drag-frame and
-   .crop-pan-frame share this exact geometry (always a 9:16 box, set inline)
-   so their drag targets land exactly on the canvas beneath them. */
+   .crop-pan-outer share this exact geometry (always a 9:16 box, set inline)
+   so children positioned as percentages inside them land exactly on the
+   canvas beneath them. */
 .crop-overlay,
 .text-drag-frame,
-.crop-pan-frame {
+.crop-pan-outer {
   position: absolute;
   inset: 0;
   margin: auto;
@@ -1115,10 +1116,14 @@ header {
   max-height: 100%;
   pointer-events: none;
 }
-/* Unlike the other two (which delegate to inner handles), this frame itself
-   is the drag target -- it only ever translates the existing crop, never
-   resizes it, so there's nothing else on it to grab. */
+/* Sized/positioned in Editor.tsx to exactly the video's own current draw
+   rect (not the full canvas) -- a crop can leave background showing at an
+   edge, and that background isn't the video, so it must never be draggable
+   as if it were. This is the actual drag target: it only ever translates
+   the existing crop, never resizes it, so there's nothing else on it to
+   grab. */
 .crop-pan-frame {
+  position: absolute;
   pointer-events: auto;
   touch-action: none;
   cursor: move;
@@ -1937,7 +1942,7 @@ header {
   .source-video-visible,
   .crop-overlay,
   .text-drag-frame,
-  .crop-pan-frame {
+  .crop-pan-outer {
     position: absolute;
     inset: 0;
     margin: auto;
@@ -2105,7 +2110,10 @@ header {
     position: sticky;
     top: 0;
     background: #16181a;
-    padding: 10px 0 4px;
+    padding: 8px 0;
+    /* Tall enough to actually contain .sheet-close (40px, top:4px) so it
+       never spills into the tool-body content sitting right below. */
+    min-height: 48px;
     z-index: 2;
   }
   .sheet-grip {

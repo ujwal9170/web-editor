@@ -25,12 +25,13 @@ export const editSchema = z.object({
       y: unit,
       width: unit.gt(0),
       height: unit.gt(0),
-      // Position of the visible window within the cropped selection, once
-      // that selection is scaled to cover the canvas -- see
-      // shared/export.mjs's cropGeometry(). 0.5 is centered; defaulted so
-      // edits saved before this field existed still parse.
-      panX: unit.default(0.5),
-      panY: unit.default(0.5),
+      // Where the cropped rectangle draws on the canvas -- independent of
+      // x/y/width/height (which only select source pixels). Left as
+      // .optional() rather than defaulted: absent means "use whatever
+      // position cropping alone implies" (see cropGeometry() in
+      // shared/export.mjs), which a hardcoded default here would erase.
+      offsetX: unit.optional(),
+      offsetY: unit.optional(),
     })
     .refine(
       (c) => c.x + c.width <= 1.001 && c.y + c.height <= 1.001,
@@ -163,7 +164,7 @@ export function initialEdit(durationMs) {
       aspectRatio: "9:16",
       background: { type: "solid", colors: ["#111827", "#7C3AED"], angle: 135 },
     },
-    crop: { x: 0, y: 0, width: 1, height: 1, panX: 0.5, panY: 0.5 },
+    crop: { x: 0, y: 0, width: 1, height: 1 },
     segments: [{ startMs: 0, endMs: durationMs, enabled: true }],
     textOverlays: [],
     audio: { mode: "original", derivativeId: null },

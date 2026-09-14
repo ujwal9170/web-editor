@@ -27,6 +27,7 @@ import {
   Check,
 } from "lucide-react";
 import { api, fileUrl, clock, awaitJob } from "@/lib/api";
+import { cropGeometry } from "@/shared/export.mjs";
 import {
   preview,
   fonts,
@@ -99,18 +100,35 @@ export default function Editor({
   // Kept off React state entirely -- read straight from the draw loop -- so
   // 60fps pointermove never touches the undo stack or autosave; only
   // pointerup commits a single change().
-  const liveCropPan = useRef<{ x: number; y: number } | null>(null),
+  const liveOffset = useRef<{ x: number; y: number } | null>(null),
     panDrag = useRef<{
       startX: number;
       startY: number;
-      startPanX: number;
-      startPanY: number;
+      startOffsetX: number;
+      startOffsetY: number;
       boxWidthPx: number;
       boxHeightPx: number;
       moved: boolean;
     } | null>(null);
   const media = initial.media!,
     duration = media.duration;
+  // Where the video itself actually draws on the 9:16 canvas right now --
+  // shrinks/shifts as the crop changes. Used to size the pan-drag hit area
+  // to just the video, not the full canvas (which can include background
+  // showing through a crop).
+  const [previewCanvasWidth, previewCanvasHeight] = dimensions(
+    edit.canvas.aspectRatio,
+  );
+  const videoRect =
+    media.width && media.height
+      ? cropGeometry(
+          edit.crop,
+          media.width,
+          media.height,
+          previewCanvasWidth,
+          previewCanvasHeight,
+        )
+      : null;
   const latest = useRef({ edit, name, caption });
   latest.current = { edit, name, caption };
   const committed = useRef(
@@ -272,22 +290,22 @@ export default function Editor({
           }
         }
         const now = performance.now();
-        const livePan = liveCropPan.current;
+        const live = liveOffset.current;
         if (
           now - lastDraw >= 32 &&
           (lastEdit !== current.current ||
             lastTime !== v.currentTime ||
             lastReady !== v.readyState ||
-            lastPanX !== livePan?.x ||
-            lastPanY !== livePan?.y)
+            lastPanX !== live?.x ||
+            lastPanY !== live?.y)
         ) {
-          const drawEdit = livePan
+          const drawEdit = live
             ? {
                 ...current.current,
                 crop: {
                   ...current.current.crop,
-                  panX: livePan.x,
-                  panY: livePan.y,
+                  offsetX: live.x,
+                  offsetY: live.y,
                 },
               }
             : current.current;
@@ -296,8 +314,8 @@ export default function Editor({
           lastEdit = current.current;
           lastTime = v.currentTime;
           lastReady = v.readyState;
-          lastPanX = livePan?.x ?? null;
-          lastPanY = livePan?.y ?? null;
+          lastPanX = live?.x ?? null;
+          lastPanY = live?.y ?? null;
         }
       }
       frame = requestAnimationFrame(draw);
@@ -329,40 +347,45 @@ export default function Editor({
       setPlaying(false);
     }
   }
-  // Reposition the crop by dragging directly on the composited preview --
-  // distinct from Free hand's edge handles (which resize the crop): this
-  // only ever slides the visible window through it, x/y/width/height
-  // untouched. The crop always discards everything outside the selection --
-  // what's left is scaled to cover the canvas completely (see cropGeometry()
-  // in shared/export.mjs), so panning only has room to move on whichever
-  // axis that cover-scale leaves overflow on; the other axis simply has
-  // nothing to drag. Eases toward centered (0.5) the closer a drag gets,
+  // Reposition the cropped rectangle by dragging directly on the composited
+  // preview -- distinct from Free hand's edge handles (which resize the
+  // crop) and from the Top/Bottom/Left/Right sliders (which only choose
+  // how much source is kept): this only ever moves crop.offsetX/offsetY,
+  // which is a completely separate concern from the crop selection itself.
+  // That's deliberate -- position used to piggyback on crop.x/crop.y, which
+  // meant a drag could only move as far as the crop selection's own source
+  // position allowed (and fighting the Top/Left sliders, which read the
+  // same fields). offsetX/offsetY instead range across the FULL canvas, so
+  // this drags the video like a free object over the whole background.
+  // Eases toward canvas-centered the closer a drag gets on either axis,
   // without ever hard-locking there -- the position always stays a free
   // blend of the raw pointer position and center, so it can still be
   // dragged away.
   function panDown(e: ReactPointerEvent<HTMLDivElement>) {
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = e.currentTarget.getBoundingClientRect();
+    if (!videoRect) return;
+    const availX = Math.max(0, previewCanvasWidth - videoRect.drawWidth),
+      availY = Math.max(0, previewCanvasHeight - videoRect.drawHeight);
     panDrag.current = {
       startX: e.clientX,
       startY: e.clientY,
-      startPanX: edit.crop.panX ?? 0.5,
-      startPanY: edit.crop.panY ?? 0.5,
+      startOffsetX: availX > 0 ? videoRect.drawX / availX : 0.5,
+      startOffsetY: availY > 0 ? videoRect.drawY / availY : 0.5,
       boxWidthPx: rect.width,
       boxHeightPx: rect.height,
       moved: false,
     };
   }
   function easePan(raw: number) {
-    const dist = Math.abs(raw - 0.5),
-      snapZone = 0.12,
+    const snapZone = 0.06,
+      dist = Math.abs(raw - 0.5),
       pull = dist < snapZone ? (1 - dist / snapZone) ** 2 * 0.7 : 0;
     return { value: raw + (0.5 - raw) * pull, near: dist < snapZone };
   }
   function panMove(e: ReactPointerEvent<HTMLDivElement>) {
     const d = panDrag.current;
-    if (!d || d.boxWidthPx <= 0 || d.boxHeightPx <= 0 || !media.width || !media.height)
-      return;
+    if (!d || d.boxWidthPx <= 0 || d.boxHeightPx <= 0 || !videoRect) return;
     const pixelDx = e.clientX - d.startX,
       pixelDy = e.clientY - d.startY;
     if (
@@ -372,62 +395,51 @@ export default function Editor({
     )
       return;
     d.moved = true;
-    const [canvasWidth, canvasHeight] = dimensions(edit.canvas.aspectRatio);
-    const c = edit.crop;
-    const sw = Math.max(2, Math.floor((media.width * c.width) / 2) * 2),
-      sh = Math.max(2, Math.floor((media.height * c.height) / 2) * 2);
-    // Same cover scale cropGeometry() computes from this crop selection.
-    const scale = Math.max(canvasWidth / sw, canvasHeight / sh);
-    const slackW = Math.max(0, sw - canvasWidth / scale),
-      slackH = Math.max(0, sh - canvasHeight / scale);
-    const unitsPerPxX = canvasWidth / d.boxWidthPx,
-      unitsPerPxY = canvasHeight / d.boxHeightPx;
-    // Dragging the content right/down means sampling further left/up in the
-    // source, hence the minus -- see the direction derivation in panMove's
-    // history for why.
+    const availX = Math.max(0, previewCanvasWidth - videoRect.drawWidth),
+      availY = Math.max(0, previewCanvasHeight - videoRect.drawHeight);
+    // d.boxWidthPx/boxHeightPx are the on-screen pixel size of the video's
+    // own draw rect (captured in panDown), matching videoRect.drawWidth/
+    // drawHeight in canvas units -- that ratio converts a screen pixel to
+    // canvas units, then to a fraction of the available offset range.
+    const unitsPerPxX = videoRect.drawWidth / d.boxWidthPx,
+      unitsPerPxY = videoRect.drawHeight / d.boxHeightPx;
     const rawX =
-      slackW > 0
-        ? Math.min(
-            1,
-            Math.max(
-              0,
-              d.startPanX - (pixelDx * unitsPerPxX) / scale / slackW,
-            ),
-          )
-        : 0.5;
-    const rawY =
-      slackH > 0
-        ? Math.min(
-            1,
-            Math.max(
-              0,
-              d.startPanY - (pixelDy * unitsPerPxY) / scale / slackH,
-            ),
-          )
-        : 0.5;
-    const easedX = slackW > 0 ? easePan(rawX) : { value: 0.5, near: false },
-      easedY = slackH > 0 ? easePan(rawY) : { value: 0.5, near: false };
-    liveCropPan.current = { x: easedX.value, y: easedY.value };
-    // The X guide is a vertical line shown while Y is near center (and vice
+        availX > 0
+          ? Math.min(
+              1,
+              Math.max(0, d.startOffsetX + (pixelDx * unitsPerPxX) / availX),
+            )
+          : 0.5,
+      rawY =
+        availY > 0
+          ? Math.min(
+              1,
+              Math.max(0, d.startOffsetY + (pixelDy * unitsPerPxY) / availY),
+            )
+          : 0.5;
+    const easedX = availX > 0 ? easePan(rawX) : { value: 0.5, near: false },
+      easedY = availY > 0 ? easePan(rawY) : { value: 0.5, near: false };
+    liveOffset.current = { x: easedX.value, y: easedY.value };
+    // The X guide is a vertical line shown while X is near center (and vice
     // versa) -- each marks the axis currently aligned, like a crosshair.
-    if (panGuideY.current)
-      panGuideY.current.style.opacity = easedX.near ? "1" : "0";
     if (panGuideX.current)
-      panGuideX.current.style.opacity = easedY.near ? "1" : "0";
+      panGuideX.current.style.opacity = easedX.near ? "1" : "0";
+    if (panGuideY.current)
+      panGuideY.current.style.opacity = easedY.near ? "1" : "0";
   }
   function panUp() {
-    if (panDrag.current?.moved && liveCropPan.current)
+    if (panDrag.current?.moved && liveOffset.current)
       change({
         ...edit,
         crop: {
           ...edit.crop,
-          panX: liveCropPan.current.x,
-          panY: liveCropPan.current.y,
+          offsetX: liveOffset.current.x,
+          offsetY: liveOffset.current.y,
         },
       });
     if (panGuideX.current) panGuideX.current.style.opacity = "0";
     if (panGuideY.current) panGuideY.current.style.opacity = "0";
-    liveCropPan.current = null;
+    liveOffset.current = null;
     panDrag.current = null;
   }
   function split() {
@@ -656,18 +668,28 @@ export default function Editor({
                 }}
               />
             )}
-            {tab === "crop" && !freehand && (
+            {tab === "crop" && !freehand && videoRect && (
               <div
-                className="crop-pan-frame"
+                className="crop-pan-outer"
                 aria-hidden="true"
                 style={{ aspectRatio: "9 / 16" }}
-                onPointerDown={panDown}
-                onPointerMove={panMove}
-                onPointerUp={panUp}
-                onPointerCancel={panUp}
               >
-                <span className="crop-pan-guide-x" ref={panGuideX} />
-                <span className="crop-pan-guide-y" ref={panGuideY} />
+                <div
+                  className="crop-pan-frame"
+                  style={{
+                    left: `${(videoRect.drawX / previewCanvasWidth) * 100}%`,
+                    top: `${(videoRect.drawY / previewCanvasHeight) * 100}%`,
+                    width: `${(videoRect.drawWidth / previewCanvasWidth) * 100}%`,
+                    height: `${(videoRect.drawHeight / previewCanvasHeight) * 100}%`,
+                  }}
+                  onPointerDown={panDown}
+                  onPointerMove={panMove}
+                  onPointerUp={panUp}
+                  onPointerCancel={panUp}
+                >
+                  <span className="crop-pan-guide-x" ref={panGuideX} />
+                  <span className="crop-pan-guide-y" ref={panGuideY} />
+                </div>
               </div>
             )}
             {tab === "text" && (
@@ -953,7 +975,14 @@ export default function Editor({
                         <Slider
                           ariaLabel={`${label} crop percent`}
                           min={0}
-                          max={maxPercent}
+                          // Fixed at 100, not maxPercent: the thumb's
+                          // position is value/max, so a dynamic max made
+                          // this slider's thumb visibly jump whenever a
+                          // DIFFERENT edge's drag changed this edge's own
+                          // limit, even though this edge's own value never
+                          // moved. apply() below still enforces the real
+                          // limit either way.
+                          max={100}
                           step={1}
                           value={percent}
                           onChange={apply}
@@ -995,7 +1024,7 @@ export default function Editor({
                   onClick={() =>
                     change({
                       ...edit,
-                      crop: { x: 0, y: 0, width: 1, height: 1, panX: 0.5, panY: 0.5 },
+                      crop: { x: 0, y: 0, width: 1, height: 1 },
                     })
                   }
                 >
@@ -1457,7 +1486,7 @@ function CropOverlay({
       height -= dy;
     }
     if (d.handle.includes("b")) height += dy;
-    onChange(clampCrop({ x, y, width, height }));
+    onChange(clampCrop({ ...d.start, x, y, width, height }));
   }
   function up() {
     if (drag.current) onCommit();
