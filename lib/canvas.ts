@@ -66,41 +66,61 @@ export function background(
   }
   ctx.fillRect(0, 0, width, height);
 }
+// fillText's own 4th (maxWidth) argument is supposed to auto-compress text
+// that's too wide, but Safari/WebKit -- the engine an on-device export
+// actually runs through when it's triggered from an iPhone -- doesn't honor
+// it together with textAlign "center": instead of shrinking, it just
+// overflows past both edges. Shrinking the font ourselves and calling plain
+// fillText (no maxWidth) sidesteps that inconsistency entirely, since plain
+// text measurement/sizing is consistent everywhere. Shared by text() and
+// measureOverlay() so the drag handle's box never disagrees with the render.
+function fitText(ctx: Context2D, t: Overlay, width: number) {
+  const scale = width / 1080;
+  const maxWidth = width * 0.94;
+  const lines = t.text.split("\n");
+  let fontSize = t.size * scale;
+  ctx.font = `700 ${fontSize}px "${t.font}"`;
+  const widest = Math.max(
+    1,
+    ...lines.map((line) => ctx.measureText(line).width),
+  );
+  if (widest > maxWidth) {
+    fontSize *= maxWidth / widest;
+    ctx.font = `700 ${fontSize}px "${t.font}"`;
+  }
+  return { lines, fontSize };
+}
 export function text(
   ctx: Context2D,
   t: Overlay,
   width: number,
   height: number,
 ) {
-  const scale = width / 1080;
-  ctx.font = `700 ${t.size * scale}px "${t.font}"`;
+  const { lines, fontSize } = fitText(ctx, t, width);
   ctx.fillStyle = t.color;
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  const lines = t.text.split("\n");
+  // t.x/t.y are the text BLOCK's own center, on both axes, not a corner --
+  // so it stays sitting on whatever point it's anchored to (the video's own
+  // center, by default) no matter how many lines get typed, rather than
+  // only growing downward away from a fixed top.
+  const top = t.y * height - (fontSize * 1.25 * lines.length) / 2;
   lines.forEach((line, i) =>
-    ctx.fillText(
-      line,
-      t.x * width,
-      t.y * height + i * t.size * scale * 1.25,
-      width * 0.94,
-    ),
+    ctx.fillText(line, t.x * width, top + i * fontSize * 1.25),
   );
 }
 // The drag hotspot for a text overlay needs its actual rendered footprint,
-// not a guess -- reuses text()'s exact font string so it never drifts from
-// what's really on screen.
+// not a guess -- reuses text()'s exact fit so it never drifts from what's
+// really on screen.
 export function measureOverlay(
   ctx: Context2D,
   t: Overlay,
   width: number,
   height: number,
 ) {
-  const scale = width / 1080;
-  ctx.font = `700 ${t.size * scale}px "${t.font}"`;
-  const lines = t.text.split("\n");
+  const { lines, fontSize } = fitText(ctx, t, width);
   const w = Math.max(1, ...lines.map((line) => ctx.measureText(line).width));
-  const h = t.size * scale * 1.25 * Math.max(1, lines.length);
+  const h = fontSize * 1.25 * Math.max(1, lines.length);
   return { width: w, height: h };
 }
 // Shared by the live preview and the on-device WebCodecs export -- a decoded
