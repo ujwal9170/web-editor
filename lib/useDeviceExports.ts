@@ -4,6 +4,12 @@ import { api, fileUrl } from "./api";
 import { createExportQueue } from "./exportQueue.mjs";
 import type { Project } from "./types";
 
+// Some devices can't run an H.264 encoder at 1080p at all (weaker/older
+// hardware, mostly) -- device-render.worker.ts throws this exact message
+// when even the software fallback fails. 720p is far more broadly supported,
+// so it's worth one automatic retry there before giving up entirely.
+const RESOLUTION_UNSUPPORTED = /H\.264 export is unavailable at this resolution/i;
+
 export type ExportTask = { project: Project; quality: "720p" | "1080p" };
 export type ExportRow = {
   id: string;
@@ -30,31 +36,50 @@ export function useDeviceExports() {
           // The editor obtained the snapshot before enqueue; no current revision is
           // read here. Editing another clip cannot change what this task exports.
           ticketId = (task as ExportTask & { ticketId: string }).ticketId;
+          const requestedResolution = quality === "720p" ? 720 : 1080;
           const run = async () => {
             control.signal.throwIfAborted();
             const { renderOnDevice } = await import("./deviceExport");
-            return renderOnDevice(
-              {
-                source: new URL(
-                  fileUrl("media", project.mediaId),
-                  location.href,
-                ).href,
-                audioSource:
-                  ["remove-vocals", "vocals-only"].includes(
-                    project.edit.audio.mode,
-                  ) && project.edit.audio.derivativeId
-                    ? new URL(
-                        fileUrl("audio", project.edit.audio.derivativeId),
-                        location.href,
-                      ).href
-                    : null,
-                edit: project.edit,
-                resolution: quality === "720p" ? 720 : 1080,
-              },
-              control.signal,
-              (p) =>
-                control.progress(`${p.phase} ${Math.round(p.progress * 100)}%`),
-            );
+            const attemptAt = (resolution: number) =>
+              renderOnDevice(
+                {
+                  source: new URL(
+                    fileUrl("media", project.mediaId),
+                    location.href,
+                  ).href,
+                  audioSource:
+                    ["remove-vocals", "vocals-only"].includes(
+                      project.edit.audio.mode,
+                    ) && project.edit.audio.derivativeId
+                      ? new URL(
+                          fileUrl("audio", project.edit.audio.derivativeId),
+                          location.href,
+                        ).href
+                      : null,
+                  edit: project.edit,
+                  resolution,
+                },
+                control.signal,
+                (p) =>
+                  control.progress(
+                    `${p.phase} ${Math.round(p.progress * 100)}%`,
+                  ),
+              );
+            try {
+              return await attemptAt(requestedResolution);
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              if (
+                requestedResolution !== 720 &&
+                RESOLUTION_UNSUPPORTED.test(message)
+              ) {
+                control.progress(
+                  "1080p isn't supported on this device -- exporting at 720p instead…",
+                );
+                return await attemptAt(720);
+              }
+              throw e;
+            }
           };
           control.progress("Waiting for this device's export slot…");
           // Where supported, also avoid concurrent encoders in another app tab.

@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ExportRow } from "@/lib/useDeviceExports";
 export default function DeviceExportQueue({
   rows,
@@ -13,6 +13,28 @@ export default function DeviceExportQueue({
   openExports: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // A successful export's toast clears itself -- there's nothing left to do
+  // with it. A failed one needs the user to actually read why and decide
+  // whether to retry, so that stays until dismissed by hand. Scheduled once
+  // per row id (not re-armed on every re-render) so activity elsewhere in
+  // the queue can't keep pushing a finished row's dismissal back.
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    for (const row of rows) {
+      if (row.status === "done" && !timers.current.has(row.id)) {
+        timers.current.set(
+          row.id,
+          setTimeout(() => {
+            dismiss(row.id);
+            timers.current.delete(row.id);
+          }, 2000),
+        );
+      }
+    }
+    for (const id of timers.current.keys())
+      if (!rows.some((r) => r.id === id)) timers.current.delete(id);
+  }, [rows, dismiss]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
   if (!rows.length) return null;
   const pending = rows.filter((r) =>
     ["queued", "running", "saving"].includes(r.status),
