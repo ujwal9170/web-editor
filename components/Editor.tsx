@@ -876,12 +876,19 @@ export default function Editor({
               // the sheet. With no sheet open, the same tap just
               // deactivates whichever text is selected.
               if (templateStripOpen) setTemplateStripOpen(false);
-              if (sheetOpen && !freehand) {
-                closeSheet();
-              } else if (selectedTextId) {
-                setSelectedTextId(null);
-                setLiveTextPos(null);
+              if (freehand) {
+                startLongPress(e);
+                return;
               }
+              // A tap on bare stage means "I'm done with that tool". The
+              // sheet closing was only ever half of it: on desktop there is
+              // no sheet, so the panel and its highlighted tab stayed lit
+              // with no way to put them away. Clearing the tab retires the
+              // tool itself, on both.
+              if (sheetOpen) closeSheet();
+              setTab("");
+              setSelectedTextId(null);
+              setLiveTextPos(null);
               startLongPress(e);
             }}
             onPointerMove={moveLongPress}
@@ -927,22 +934,6 @@ export default function Editor({
                 }}
               />
             )}
-            {tab === "blur" && (liveBlur ?? edit.blur) && (
-              <BlurOverlay
-                region={(liveBlur ?? edit.blur)!}
-                onChange={(b) => {
-                  liveBlurRef.current = b;
-                  setLiveBlur(b);
-                }}
-                onCommit={() => {
-                  setLiveBlur((b) => {
-                    if (b) change({ ...edit, blur: b });
-                    liveBlurRef.current = null;
-                    return null;
-                  });
-                }}
-              />
-            )}
             {tab === "crop" && !freehand && videoRect && (
               <div
                 className="crop-pan-outer"
@@ -967,7 +958,31 @@ export default function Editor({
                 </div>
               </div>
             )}
-            {tab === "text" && (
+            {/* Rendered after the crop pan frame (which covers the whole
+                video on the Crop tab) so a tap lands on the thing you can
+                see and mean, not on the layer above it. Both stay live
+                whatever tab is open: grabbing a blur box or a caption is how
+                you'd expect to move it, and having to find the matching tab
+                first is a detour. Taking hold of one selects its tool. */}
+            {!freehand && (liveBlur ?? edit.blur) && (
+              <BlurOverlay
+                region={(liveBlur ?? edit.blur)!}
+                active={tab === "blur"}
+                onGrab={() => setTab("blur")}
+                onChange={(b) => {
+                  liveBlurRef.current = b;
+                  setLiveBlur(b);
+                }}
+                onCommit={() => {
+                  setLiveBlur((b) => {
+                    if (b) change({ ...edit, blur: b });
+                    liveBlurRef.current = null;
+                    return null;
+                  });
+                }}
+              />
+            )}
+            {!freehand && (
               <div
                 className="text-drag-frame"
                 ref={textFrame}
@@ -998,6 +1013,7 @@ export default function Editor({
                         height={box.height}
                         frameRef={textFrame}
                         selected={selectedTextId === t.id}
+                        onGrab={() => setTab("text")}
                         onTap={() => selectOverlay(t.id)}
                         onDelete={() => removeOverlay(t.id)}
                         onChange={(x, y) =>
@@ -1142,7 +1158,7 @@ export default function Editor({
           </div>
         </div>
         <aside
-          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}`}
+          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}${tab ? "" : " tool-idle"}`}
         >
           <div className="tool-tabs">
             {[
@@ -2042,13 +2058,18 @@ function CropOverlay({
 // letterboxed rect, because the region is stored in canvas fractions.
 function BlurOverlay({
   region,
+  active,
+  onGrab,
   onChange,
   onCommit,
 }: {
   region: BlurRegion;
+  active: boolean;
+  onGrab: () => void;
   onChange: (region: BlurRegion) => void;
   onCommit: () => void;
 }) {
+  const [snapped, setSnapped] = useState({ x: false, y: false });
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{
     handle: DragHandle | "move";
@@ -2062,6 +2083,7 @@ function BlurOverlay({
     return (e: ReactPointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      onGrab();
       e.currentTarget.setPointerCapture(e.pointerId);
       const rect = box.current?.getBoundingClientRect();
       if (!rect) return;
@@ -2083,9 +2105,13 @@ function BlurOverlay({
     let { x, y, width, height } = d.start;
     if (d.handle === "move") {
       // Moving only ever translates: the box keeps its size and stops at the
-      // frame edges rather than being squashed against them.
-      x = Math.min(1 - width, Math.max(0, x + dx));
-      y = Math.min(1 - height, Math.max(0, y + dy));
+      // frame edges rather than being squashed against them. Its own centre
+      // is what snaps, not its corner, so "centred" means what it looks like.
+      const rawX = Math.min(1 - width, Math.max(0, x + dx)),
+        rawY = Math.min(1 - height, Math.max(0, y + dy));
+      x = snapToCentre(rawX + width / 2) - width / 2;
+      y = snapToCentre(rawY + height / 2) - height / 2;
+      setSnapped({ x: x !== rawX, y: y !== rawY });
     } else {
       // Each axis is clamped against the edge being dragged, so running out
       // of room stops that edge instead of sliding the whole box: dragging
@@ -2109,6 +2135,7 @@ function BlurOverlay({
   function up() {
     if (drag.current) onCommit();
     drag.current = null;
+    setSnapped({ x: false, y: false });
   }
   const handles: DragHandle[] = ["tl", "tr", "bl", "br"];
   return (
@@ -2118,8 +2145,14 @@ function BlurOverlay({
       aria-hidden="true"
       style={{ aspectRatio: "9 / 16" }}
     >
+      {drag.current && (
+        <>
+          <span className={`centre-guide v${snapped.x ? " snapped" : ""}`} />
+          <span className={`centre-guide h${snapped.y ? " snapped" : ""}`} />
+        </>
+      )}
       <div
-        className="blur-frame"
+        className={`blur-frame${active ? "" : " dormant"}`}
         style={{
           left: `${region.x * 100}%`,
           top: `${region.y * 100}%`,
@@ -2156,6 +2189,13 @@ const TAP_THRESHOLD = 4;
 // text dragged up there gets visually clipped by that chrome, not by us, so
 // it's kept out of reach entirely rather than just discouraged.
 const TOP_SAFE_ZONE = 0.1;
+// How close to the centre line a drag has to get before it sticks. Kept
+// small on purpose: enough that centring something is effortless, not so
+// much that deliberately placing text just off-centre becomes a fight.
+const SNAP = 0.018;
+function snapToCentre(value: number) {
+  return Math.abs(value - 0.5) < SNAP ? 0.5 : value;
+}
 function TextDragHandle({
   x,
   y,
@@ -2163,6 +2203,7 @@ function TextDragHandle({
   height,
   frameRef,
   selected,
+  onGrab,
   onTap,
   onDelete,
   onChange,
@@ -2174,6 +2215,7 @@ function TextDragHandle({
   height: number;
   frameRef: RefObject<HTMLDivElement | null>;
   selected: boolean;
+  onGrab: () => void;
   onTap: () => void;
   onDelete: () => void;
   onChange: (x: number, y: number) => void;
@@ -2189,7 +2231,9 @@ function TextDragHandle({
     moved: boolean;
   } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [snapped, setSnapped] = useState({ x: false, y: false });
   function down(e: ReactPointerEvent<HTMLDivElement>) {
+    onGrab();
     e.preventDefault();
     // Stops the preview stage's own pointerdown (which deselects whatever
     // text is active on any tap outside it) from firing right behind this
@@ -2227,23 +2271,36 @@ function TextDragHandle({
     // own floor: the box's own half-height keeps its rendered footprint (not
     // just its center point) out of TOP_SAFE_ZONE entirely.
     const minY = TOP_SAFE_ZONE + height / 2;
-    onChange(
-      Math.min(0.9, Math.max(0, d.startVX + pixelDx / d.boxWidth)),
-      Math.min(0.9, Math.max(minY, d.startVY + pixelDy / d.boxHeight)),
-    );
+    const rawX = Math.min(0.9, Math.max(0, d.startVX + pixelDx / d.boxWidth)),
+      rawY = Math.min(0.9, Math.max(minY, d.startVY + pixelDy / d.boxHeight));
+    const x = snapToCentre(rawX),
+      y = snapToCentre(rawY);
+    setSnapped({ x: x !== rawX, y: y !== rawY });
+    onChange(x, y);
   }
   function up() {
     if (drag.current?.moved) onCommit();
     else if (drag.current) onTap();
     drag.current = null;
     setDragging(false);
+    setSnapped({ x: false, y: false });
   }
   return (
     <>
       {dragging && (
-        <div className="text-safe-zone" aria-hidden="true">
-          <span>Stays clear of platform UI</span>
-        </div>
+        <>
+          <div className="text-safe-zone" aria-hidden="true">
+            <span>Stays clear of platform UI</span>
+          </div>
+          <span
+            className={`centre-guide v${snapped.x ? " snapped" : ""}`}
+            aria-hidden="true"
+          />
+          <span
+            className={`centre-guide h${snapped.y ? " snapped" : ""}`}
+            aria-hidden="true"
+          />
+        </>
       )}
       <div
         className={`text-drag-handle${selected ? " selected" : ""}`}

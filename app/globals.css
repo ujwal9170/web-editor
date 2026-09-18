@@ -1404,6 +1404,41 @@ header {
 /* Inactive by default -- an invisible hit target only, so untouched text
    reads as plain text on the canvas, not a UI element. Selecting it (or
    actively dragging it) is what turns on its border and delete button. */
+/* Centre lines, shown only during a drag. They brighten and thicken the
+   moment the thing being dragged snaps to that axis, so the feedback is
+   "it's centred now", not just "the centre is over there". */
+.centre-guide {
+  position: absolute;
+  background: #ffffff55;
+  pointer-events: none;
+  z-index: 2;
+}
+.centre-guide.v {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+.centre-guide.h {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+.centre-guide.snapped {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+.centre-guide.v.snapped {
+  width: 2px;
+  transform: translateX(-1px);
+}
+.centre-guide.h.snapped {
+  height: 2px;
+  transform: translateY(-1px);
+}
 /* Sits on the 9:16 canvas box, not the video's letterboxed rect (which is
    what .crop-overlay uses) -- the blur region is stored in canvas fractions,
    so its handles have to measure against the same box the render does. */
@@ -1423,6 +1458,17 @@ header {
   pointer-events: auto;
   touch-action: none;
   cursor: move;
+}
+/* Still grabbable from any tab, but it shouldn't shout while you're doing
+   something else -- faint enough to ignore, visible enough to aim at. */
+.blur-frame.dormant {
+  opacity: 0.35;
+}
+.blur-frame.dormant .blur-handle {
+  opacity: 0;
+}
+.blur-frame.dormant:hover {
+  opacity: 0.7;
 }
 .blur-handle {
   position: absolute;
@@ -1595,7 +1641,10 @@ header {
    mobile that panel already collapses via sheetOpen, but on desktop it has
    no closed state of its own (see .tool-body below), so this is the only
    thing that actually hides it there. */
-.inspector.template-open .tool-body {
+.inspector.template-open .tool-body,
+/* No tool selected -- the tab rail stays, the panel goes. Without this the
+   panel sat there empty on desktop after a tap outside retired the tool. */
+.inspector.tool-idle .tool-body {
   display: none;
 }
 .template-strip-item {
@@ -2389,25 +2438,36 @@ header {
   .tool-body {
     display: none;
   }
-  /* A fixed (not max-) height, now a set share of the screen rather than a
-     small drawer -- the video pane above it shrinks by exactly this much
-     whenever a tab opens it, on every tab. */
+  /* The sheet floats over the editor instead of sitting in the column with
+     it. It used to take its 28vh out of the flow, which meant opening any
+     tool re-solved everything above: the video resized (530 -> 443px tall),
+     the playback bar jumped 101px and the clip track vanished, then it all
+     snapped back on close. Taking it out of the flow entirely is what keeps
+     the video the same size whether a tool is open or not -- only the sheet
+     moves now. */
   .inspector.sheet-open .tool-body {
     display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
     height: 28vh;
-    padding: 0 16px 16px;
-    border-bottom: 1px solid var(--line);
+    /* Below .tool-tabs (20) so the rail stays reachable over the sheet. */
+    z-index: 18;
+    background: #16181a;
+    border-top: 1px solid var(--line);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 28px #0008;
+    padding: 0 16px calc(16px + env(safe-area-inset-bottom, 0px));
     overflow-y: auto;
     overscroll-behavior: contain;
   }
   .inspector.sheet-open {
     border-radius: 16px 16px 0 0;
   }
-  /* While a panel is open the clip track is the least useful thing on screen,
-     so it yields its height to the video instead. */
-  .edit-workspace:has(.inspector.sheet-open) .timeline {
-    display: none;
-  }
+  /* The clip track is left exactly where it is; the sheet covers it. Hiding
+     it (either way) only reintroduced the reflow the sheet's fixed position
+     just removed. */
   .sheet-header {
     display: flex;
     align-items: center;
