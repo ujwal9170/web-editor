@@ -3,6 +3,54 @@ import assert from "node:assert/strict";
 import { createExportQueue } from "../lib/exportQueue.mjs";
 import { cropGeometry, exportTimeline, frameTimes } from "../shared/export.mjs";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+// The export worker no longer hands a crop rectangle to the decoder: it
+// decodes a whole aspect-preserving frame and crops THAT. So the geometry
+// has to hold against the normalized frame's dimensions, for any source
+// shape -- if the two axes ever scale differently here, the export is
+// stretched, which is exactly what it did on Android before.
+test("normalized full frames keep source proportions when cropped at 720p and 1080p", () => {
+  for (const outputWidth of [720, 1080]) {
+    for (const [sourceWidth, sourceHeight] of [
+      [1080, 1920],
+      [1920, 1080],
+      [720, 1280],
+      [1080, 1080],
+    ]) {
+      const outputHeight = (outputWidth * 16) / 9;
+      const scale = Math.min(
+        1,
+        outputWidth / sourceWidth,
+        outputHeight / sourceHeight,
+      );
+      const frameWidth = Math.round(sourceWidth * scale);
+      const frameHeight = Math.round((frameWidth * sourceHeight) / sourceWidth);
+      for (const crop of [
+        { x: 0, y: 0, width: 1, height: 1 },
+        { x: 0, y: 0.3, width: 1, height: 0.4 },
+        { x: 0.2, y: 0.15, width: 0.6, height: 0.7 },
+      ]) {
+        const g = cropGeometry(
+          crop,
+          frameWidth,
+          frameHeight,
+          outputWidth,
+          outputHeight,
+        );
+        // Both axes have the same scale (up to the two-pixel rounding budget).
+        assert.ok(
+          Math.abs(g.drawWidth / g.width - g.drawHeight / g.height) < 0.02,
+        );
+        assert.ok(g.left + g.width <= frameWidth);
+        assert.ok(g.top + g.height <= frameHeight);
+        const fullScale = Math.min(
+          outputWidth / frameWidth,
+          outputHeight / frameHeight,
+        );
+        assert.ok(Math.abs(g.drawHeight - g.height * fullScale) < 2.01);
+      }
+    }
+  }
+});
 test("device crop follows the stable-window fixed scale at both resolutions", () => {
   for (const width of [720, 1080]) {
     const height = (width * 16) / 9;
