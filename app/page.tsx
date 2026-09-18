@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
+import dynamic from "next/dynamic";
 import {
   Film,
   Download,
@@ -22,16 +23,28 @@ import {
   Users,
   KeyRound,
   UserPlus,
+  Share2,
 } from "lucide-react";
-import { api, fileUrl, clock, size, awaitJob } from "@/lib/api";
+import { api, fileUrl, clock, size, awaitJob, LAST_TEMPLATE_KEY } from "@/lib/api";
 import type { Media, Project, Export, Job, Template } from "@/lib/types";
-import Editor from "@/components/Editor";
 import DeviceExportQueue from "@/components/DeviceExportQueue";
 import { useDeviceExports } from "@/lib/useDeviceExports";
 import CaptionPreview from "@/components/CaptionPreview";
 import ProjectCard from "@/components/ProjectCard";
 import MediaCard from "@/components/MediaCard";
 import { useWebMCP } from "@/lib/useWebMCP";
+
+// Editor is a large, canvas/WebCodecs-heavy component that most visits
+// (browsing Media, Exports, admin) never open -- code-splitting it out of
+// the main bundle keeps those far more common pages lighter to load.
+const Editor = dynamic(() => import("@/components/Editor"), {
+  ssr: false,
+  loading: () => (
+    <div className="editor-loading">
+      <LoaderCircle className="spin" size={28} />
+    </div>
+  ),
+});
 
 type QueueItem = {
   media: Media;
@@ -177,6 +190,7 @@ export default function Studio() {
     setExports(e);
     setJobs(j);
     setTemplates(t);
+    return j;
   }
   useEffect(() => {
     api("/auth")
@@ -199,9 +213,47 @@ export default function Studio() {
   }, [isAdmin, view]);
   useEffect(() => {
     if (!authed) return;
-    refresh().catch((e) => setError(e.message));
-    const timer = setInterval(() => refresh().catch(() => {}), 2500);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    // Poll fast only while something server-side is actually in flight
+    // (an import, an export render, isolation) or the on-device instrument
+    // queue is running; otherwise back off so an idle tab isn't hitting
+    // five endpoints every 2.5s for nothing.
+    let pollFailures = 0;
+    let showingPollError = false;
+    async function tick() {
+      try {
+        const jobs = await refresh();
+        if (cancelled) return;
+        pollFailures = 0;
+        // Only clear an error THIS loop put up -- never an unrelated one
+        // (a failed delete, a failed save) that just happens to still be
+        // on screen when a poll succeeds.
+        if (showingPollError) {
+          setError("");
+          showingPollError = false;
+        }
+        const busy =
+          runningRef.current ||
+          jobs.some((j) => j.status === "running" || j.status === "queued");
+        timer = setTimeout(tick, busy ? 2500 : 9000);
+      } catch (e: any) {
+        if (cancelled) return;
+        // Tolerate one missed poll silently -- a brief server restart or
+        // dropped connection shouldn't flash an error for something that
+        // resolves on its own a few seconds later.
+        if (++pollFailures >= 2) {
+          setError(e.message);
+          showingPollError = true;
+        }
+        timer = setTimeout(tick, 9000);
+      }
+    }
+    tick();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [authed]);
   async function attempt(fn: () => Promise<void>) {
     setBusy(true);
@@ -214,14 +266,69 @@ export default function Studio() {
       setBusy(false);
     }
   }
+  // navigator.share() with an attached file turned out unreliable in
+  // practice (desktop AND mobile) -- browsers only guarantee it "best
+  // effort", with undocumented size limits and a click-must-be-fresh
+  // requirement no amount of app-side code can force to hold. A plain link
+  // has none of that: every browser, on every device, opens a URL the same
+  // way, every time. /api/share/:id (server/app.mjs) is a deliberately
+  // unauthenticated route serving just this one export by its own
+  // (unguessable UUID) id, so Telegram's share intent can open it directly
+  // -- same lifecycle as the export itself, gone the moment it expires.
+  function telegramShareHref(item: Export) {
+    const shareUrl = new URL(`/api/share/${item.id}`, location.href).href;
+    return `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(item.name || "")}`;
+  }
+  function lastTemplateId(): string | undefined {
+    try {
+      const id = localStorage.getItem(LAST_TEMPLATE_KEY);
+      return id && templates.some((t) => t.id === id) ? id : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  async function startEditing(item: Media) {
+    const templateId = lastTemplateId();
+    const p = await api<Project>("/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        mediaId: item.id,
+        ...(templateId ? { templateId } : {}),
+      }),
+    });
+    setProject({ ...p, media: item });
+    setView("editor");
+  }
   async function upload(file?: File) {
     if (!file) return;
     await attempt(async () => {
       const body = new FormData();
       body.append("file", file);
-      await api("/media/uploads", { method: "POST", body });
+      const { job } = await api("/media/uploads", { method: "POST", body });
       setImporting(false);
+      const done = await awaitJob(job.id);
+      const list = await api<Media[]>("/media");
       await refresh();
+      const item = list.find((m) => m.id === done.resultId);
+      if (item) await startEditing(item);
+    });
+  }
+  async function importAndOpen() {
+    await attempt(async () => {
+      const { job } = await api("/downloads", {
+        method: "POST",
+        body: JSON.stringify({ url, confirmed: permission }),
+      });
+      setImporting(false);
+      setUrl("");
+      setPermission(false);
+      const done = await awaitJob(job.id);
+      const list = await api<Media[]>("/media");
+      await refresh();
+      const item = list.find((m) => m.id === done.resultId);
+      if (!item)
+        throw new Error("Download finished, but the video could not be found.");
+      await startEditing(item);
     });
   }
   async function addUser() {
@@ -283,14 +390,7 @@ export default function Studio() {
     });
   }
   async function editMedia(item: Media) {
-    await attempt(async () => {
-      const p = await api<Project>("/projects", {
-        method: "POST",
-        body: JSON.stringify({ mediaId: item.id }),
-      });
-      setProject({ ...p, media: item });
-      setView("editor");
-    });
+    await attempt(() => startEditing(item));
   }
   async function useTemplateWithMedia(template: Template, item: Media) {
     await attempt(async () => {
@@ -298,6 +398,9 @@ export default function Studio() {
         method: "POST",
         body: JSON.stringify({ mediaId: item.id, templateId: template.id }),
       });
+      try {
+        localStorage.setItem(LAST_TEMPLATE_KEY, template.id);
+      } catch {}
       setTemplatePicker(null);
       setProject({ ...p, media: item });
       setView("editor");
@@ -511,6 +614,12 @@ export default function Studio() {
                       setNewUser({ ...newUser, username: e.target.value })
                     }
                   />
+                  {newUser.username.length > 0 &&
+                    newUser.username.trim().length < 3 && (
+                      <small className="field-hint">
+                        At least 3 characters.
+                      </small>
+                    )}
                 </label>
                 <label>
                   Password
@@ -522,6 +631,13 @@ export default function Studio() {
                       setNewUser({ ...newUser, password: e.target.value })
                     }
                   />
+                  {newUser.password.length > 0 &&
+                    newUser.password.length < 8 && (
+                      <small className="field-hint">
+                        {8 - newUser.password.length} more character
+                        {8 - newUser.password.length === 1 ? "" : "s"} needed.
+                      </small>
+                    )}
                 </label>
               </div>
               <button
@@ -535,6 +651,14 @@ export default function Studio() {
               >
                 Create account
               </button>
+              {(newUser.username.trim().length >= 3 ||
+                newUser.password.length > 0) &&
+                (newUser.username.trim().length < 3 ||
+                  newUser.password.length < 8) && (
+                  <p className="field-hint">
+                    Fill in both fields above to enable Create account.
+                  </p>
+                )}
               <p className="hint">
                 New accounts are ordinary members. Admin rights are granted only
                 from the command line (`pnpm user promote &lt;name&gt;`), so a
@@ -615,37 +739,88 @@ export default function Studio() {
                 <div className="eyebrow">YOUR CREATIVE DESK</div>
                 <h1>
                   {view === "media"
-                    ? "All your footage."
+                    ? mediaTab === "all"
+                      ? "Start a new video."
+                      : "All your footage."
                     : view === "exports"
                       ? "Ready for the feed."
                       : "Pick up where you left off."}
                 </h1>
                 <p>
                   {view === "media"
-                    ? "Bring a clip in. Make it yours."
+                    ? mediaTab === "all"
+                      ? "Everything else you've brought in lives in the tabs below."
+                      : "Bring a clip in. Make it yours."
                     : view === "exports"
                       ? "Your finished edits, with captions saved alongside."
                       : "Open a saved project or start with a clip from Media."}
                 </p>
               </div>
-              <button className="primary" onClick={() => setImporting(true)}>
-                <Plus size={18} /> Import video
-              </button>
+              {!(view === "media" && mediaTab === "all") && (
+                <button className="primary" onClick={() => setImporting(true)}>
+                  <Plus size={18} /> Import video
+                </button>
+              )}
             </div>
             {view === "media" && mediaTab === "all" && (
-              <div className="import-strip">
+              <div
+                className="import-hero"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  upload(e.dataTransfer.files[0]);
+                }}
+              >
                 <div className="import-icon">
-                  <Download size={23} />
+                  <Download size={28} />
                 </div>
-                <div>
-                  <strong>Bring a video link to your workspace</strong>
-                  <p>
-                    Instagram, YouTube or TikTok — with its caption when
-                    available.
-                  </p>
-                </div>
-                <button className="subtle" onClick={() => setImporting(true)}>
-                  Paste a link <ArrowUpRight size={16} />
+                <h2>Bring your footage in.</h2>
+                <p>
+                  Paste a public Instagram, YouTube or TikTok video link.
+                  Once it's downloaded, the editor opens automatically. Up to
+                  15 minutes and 300 MB.
+                </p>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    importAndOpen();
+                  }}
+                >
+                  <label>
+                    Video link
+                    <input
+                      type="url"
+                      required
+                      placeholder="Instagram, YouTube or TikTok URL"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                    />
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={permission}
+                      onChange={(e) => setPermission(e.target.checked)}
+                      required
+                    />
+                    I own this content or have permission to use it.
+                  </label>
+                  <button className="primary" disabled={busy}>
+                    {busy ? (
+                      <LoaderCircle className="spin" size={18} />
+                    ) : (
+                      <Download size={18} />
+                    )}{" "}
+                    Download &amp; open editor
+                  </button>
+                </form>
+                <div className="divider">or</div>
+                <button
+                  className="subtle wide"
+                  onClick={() => input.current?.click()}
+                  disabled={busy}
+                >
+                  <Upload size={18} /> Upload from device
                 </button>
               </div>
             )}
@@ -657,7 +832,7 @@ export default function Studio() {
                       className={mediaTab === "all" ? "selected" : ""}
                       onClick={() => setMediaTab("all")}
                     >
-                      All media <span>{sourceMedia.length}</span>
+                      New video
                     </button>
                     <button
                       className={mediaTab === "queue" ? "selected" : ""}
@@ -693,7 +868,7 @@ export default function Studio() {
                   </button>
                 )}
               </div>
-              {!(view === "media" && mediaTab === "queue") && (
+              {!(view === "media" && mediaTab === "all") && (
                 <label className="search">
                   <Search size={17} />
                   <input
@@ -707,6 +882,46 @@ export default function Studio() {
             </div>
             {view === "media" && mediaTab === "queue" ? (
               <div className="queue-panel">
+                <div className="queue-toolbar">
+                  <div>
+                    <strong>Pick a clip</strong>
+                    <p>Use a clip's ⋯ menu to add it to the removal queue.</p>
+                  </div>
+                </div>
+                <div className="media-grid queue-pick-grid">
+                  {sourceMedia
+                    .filter((m) =>
+                      m.name.toLowerCase().includes(query.toLowerCase()),
+                    )
+                    .map((m) => (
+                      <MediaCard
+                        key={m.id}
+                        media={m}
+                        busy={busy}
+                        onOpen={() => editMedia(m)}
+                        onCaption={() => setCaption(m)}
+                        onDelete={() => deleteMedia(m)}
+                        queueMenu={{
+                          open: menuOpen === m.id,
+                          queued: queue.some(
+                            (q) =>
+                              q.media.id === m.id &&
+                              (q.status === "queued" ||
+                                q.status === "processing"),
+                          ),
+                          onToggle: () =>
+                            setMenuOpen(menuOpen === m.id ? null : m.id),
+                          onAdd: () => addToQueue(m),
+                        }}
+                      />
+                    ))}
+                  {sourceMedia.length === 0 && (
+                    <p className="empty">
+                      No clips yet — import one from New video.
+                    </p>
+                  )}
+                </div>
+                <hr />
                 <div className="queue-toolbar">
                   <div>
                     <strong>
@@ -732,15 +947,7 @@ export default function Studio() {
                   <div className="empty">
                     <Music2 size={36} />
                     <h2>Nothing queued yet.</h2>
-                    <p>
-                      Add a clip from All media using its ⋯ menu on the card.
-                    </p>
-                    <button
-                      className="subtle"
-                      onClick={() => setMediaTab("all")}
-                    >
-                      Go to All media <ArrowUpRight size={16} />
-                    </button>
+                    <p>Add a clip above using its ⋯ menu.</p>
                   </div>
                 ) : (
                   <div className="queue-list">
@@ -749,6 +956,8 @@ export default function Studio() {
                         <img
                           src={fileUrl("media", q.media.id, "thumbnail")}
                           alt=""
+                          loading="lazy"
+                          decoding="async"
                         />
                         <div className="queue-row-body">
                           <h3>{q.media.name}</h3>
@@ -786,34 +995,6 @@ export default function Studio() {
             ) : (
             <div className="media-grid">
               {view === "media" &&
-                mediaTab === "all" &&
-                sourceMedia
-                  .filter((m) =>
-                    m.name.toLowerCase().includes(query.toLowerCase()),
-                  )
-                  .map((m) => (
-                    <MediaCard
-                      key={m.id}
-                      media={m}
-                      busy={busy}
-                      onOpen={() => editMedia(m)}
-                      onCaption={() => setCaption(m)}
-                      onDelete={() => deleteMedia(m)}
-                      queueMenu={{
-                        open: menuOpen === m.id,
-                        queued: queue.some(
-                          (q) =>
-                            q.media.id === m.id &&
-                            (q.status === "queued" ||
-                              q.status === "processing"),
-                        ),
-                        onToggle: () =>
-                          setMenuOpen(menuOpen === m.id ? null : m.id),
-                        onAdd: () => addToQueue(m),
-                      }}
-                    />
-                  ))}
-              {view === "media" &&
                 mediaTab === "removed" &&
                 isolatedMedia
                   .filter((m) =>
@@ -829,24 +1010,6 @@ export default function Studio() {
                       onDelete={() => deleteMedia(m)}
                     />
                   ))}
-              {view === "media" && mediaTab === "all" && (
-                <button
-                  className="upload-card"
-                  onClick={() => input.current?.click()}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    upload(e.dataTransfer.files[0]);
-                  }}
-                >
-                  <span>
-                    <Plus size={25} />
-                  </span>
-                  <strong>Add your next clip</strong>
-                  <p>Drop a video here or browse files</p>
-                  <small>Up to 300 MB · 15 minutes</small>
-                </button>
-              )}
               {view === "editor" &&
                 editsTab === "projects" &&
                 projects
@@ -915,6 +1078,8 @@ export default function Studio() {
                         <img
                           src={fileUrl("export", x.id, "thumbnail")}
                           alt={x.name}
+                          loading="lazy"
+                          decoding="async"
                         />
                         <span className="source-tag finished">
                           <Check size={12} /> Exported
@@ -946,6 +1111,15 @@ export default function Studio() {
                               href={fileUrl("export", x.id, "file", true)}
                             >
                               <Download size={18} />
+                            </a>
+                            <a
+                              title="Share to Telegram"
+                              aria-label={`Share ${x.name} to Telegram`}
+                              href={telegramShareHref(x)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <Share2 size={18} />
                             </a>
                             <button
                               aria-label="Delete export"
@@ -1249,7 +1423,12 @@ export default function Studio() {
                       disabled={busy}
                       onClick={() => useTemplateWithMedia(templatePicker, m)}
                     >
-                      <img src={fileUrl("media", m.id, "thumbnail")} alt={m.name} />
+                      <img
+                        src={fileUrl("media", m.id, "thumbnail")}
+                        alt={m.name}
+                        loading="lazy"
+                        decoding="async"
+                      />
                       <span>{m.name}</span>
                     </button>
                   ))}

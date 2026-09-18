@@ -328,8 +328,16 @@ hr {
   margin-bottom: 14px;
 }
 .admin-add .row {
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 12px;
+}
+/* Explains why "Create account" is still disabled -- a disabled button
+   gives zero feedback on its own about which requirement isn't met yet. */
+.field-hint {
+  display: block;
+  font-size: 11px;
+  color: #e0b04d;
+  margin-top: 4px;
 }
 .admin-list {
   display: flex;
@@ -440,26 +448,46 @@ header {
 .page-heading p {
   font-size: 14px;
 }
-.import-strip {
+.import-hero {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 18px;
+  text-align: center;
+  gap: 6px;
   border: 1px solid #3d4635;
   background: linear-gradient(115deg, #232c20, #1b201b);
-  padding: 22px;
-  border-radius: 12px;
-  margin-bottom: 28px;
+  padding: 36px 24px;
+  border-radius: 16px;
+  /* Caps how wide the card gets on a big desktop screen -- a moot cap on
+     phones, where the viewport itself is already narrower than this. */
+  max-width: 640px;
+  margin: 0 auto 28px;
 }
-.import-strip strong {
-  font-size: 15px;
+.import-hero .import-icon {
+  margin-bottom: 8px;
 }
-.import-strip p {
+.import-hero h2 {
+  font-size: 20px;
+  margin: 0;
+}
+.import-hero > p {
   font-size: 13px;
-  margin-top: 4px;
+  color: var(--muted);
+  max-width: 420px;
+  margin-bottom: 8px;
 }
-.import-strip > .subtle {
-  margin-left: auto;
-  background: transparent;
+.import-hero form {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+}
+.import-hero .divider,
+.import-hero > .subtle.wide {
+  width: 100%;
+  max-width: 360px;
 }
 .import-icon,
 .modal-icon {
@@ -593,6 +621,16 @@ header {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+.queue-panel hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+.queue-pick-grid {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 .queue-toolbar {
   display: flex;
@@ -793,33 +831,6 @@ header {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.upload-card {
-  min-height: 340px;
-  border: 1px dashed #47523d;
-  border-radius: 12px;
-  background: #19201766;
-  flex-direction: column;
-  color: #c1cbb8;
-}
-.upload-card > span {
-  padding: 16px;
-  background: #2c3924;
-  border-radius: 50%;
-  color: var(--accent);
-  margin-bottom: 8px;
-}
-.upload-card strong {
-  font-size: 15px;
-  margin-top: 7px;
-}
-.upload-card p {
-  font-size: 13px;
-}
-.upload-card small {
-  font-size: 12px;
-  color: #7e8b7b;
-  margin-top: 10px;
 }
 .empty {
   display: flex;
@@ -1045,6 +1056,13 @@ header {
 }
 .spin {
   animation: spin 1s linear infinite;
+}
+.editor-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  color: var(--muted);
 }
 @keyframes spin {
   to {
@@ -1376,9 +1394,40 @@ header {
 /* Inactive by default -- an invisible hit target only, so untouched text
    reads as plain text on the canvas, not a UI element. Selecting it (or
    actively dragging it) is what turns on its border and delete button. */
+/* Shown only while a text overlay is actively being dragged -- marks the
+   band its box can never enter (TOP_SAFE_ZONE in Editor.tsx), not a
+   permanent fixture cluttering the preview the rest of the time. */
+.text-safe-zone {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 10%;
+  background: repeating-linear-gradient(
+    45deg,
+    #facc1533,
+    #facc1533 8px,
+    #facc1555 8px,
+    #facc1555 16px
+  );
+  border-bottom: 1.5px dashed #facc15;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 4px;
+}
+.text-safe-zone span {
+  font-size: 10px;
+  font-weight: 600;
+  color: #78350f;
+  background: #facc15;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
 .text-drag-handle {
   position: absolute;
-  transform: translateX(-50%);
+  /* x/y are the text block's own center on both axes (lib/canvas.ts's
+     text() draws it the same way), not a corner. */
+  transform: translate(-50%, -50%);
   border: 1.5px dashed transparent;
   border-radius: 4px;
   pointer-events: auto;
@@ -1458,6 +1507,100 @@ header {
   background: #333e2b;
   color: var(--accent);
 }
+/* The strip is a top-level fixed panel (not nested under .tool-tabs, which
+   on mobile carries its own transform -- a fixed descendant of a transformed
+   ancestor is contained by THAT ancestor's box, not the viewport, which is
+   exactly what clipped this before), so it always renders in full,
+   centered over the video, regardless of where the Templates button sits
+   in either the desktop (inline top row) or mobile (fixed right rail)
+   layout. */
+.template-strip {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  background: #16181a;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 18px;
+  box-shadow: 0 8px 28px #0008;
+  max-width: min(92vw, 560px);
+  overflow-x: auto;
+}
+/* Opening it retires whatever tool panel was showing underneath -- on
+   mobile that panel already collapses via sheetOpen, but on desktop it has
+   no closed state of its own (see .tool-body below), so this is the only
+   thing that actually hides it there. */
+.inspector.template-open .tool-body {
+  display: none;
+}
+.template-strip-item {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 60px;
+}
+.template-strip-swatch {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  flex-shrink: 0;
+}
+.template-strip-add {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px dashed var(--muted);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.template-strip-remove {
+  position: absolute;
+  /* Aimed at the swatch's own top-right corner, not its center, so a tap
+     anywhere near the middle of the circle always hits the swatch, never
+     this badge. */
+  top: -6px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3a1414;
+  border: 1px solid #5a1f1f;
+  color: #ff8080;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.template-strip-remove svg {
+  width: 8px;
+  height: 8px;
+}
+.template-strip-name {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.template-strip-hint {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  padding: 12px 4px 0;
+}
 .tool-body {
   padding: 22px;
   max-height: 660px;
@@ -1489,6 +1632,21 @@ header {
   border-color: var(--accent);
   color: var(--accent);
   background: #2b3425;
+}
+/* Announced by screen readers only -- there was no rule defining this at
+   all before, so it rendered as a plain, fully visible span (the
+   redundant bold "Export complete..."/"Export failed..." line duplicating
+   the hint right above it). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .hint {
   font-size: 12px;
@@ -1591,6 +1749,13 @@ header {
   margin-top: 20px;
   padding-top: 2px;
 }
+/* The rendered overlay is always center-aligned (lib/canvas.ts draws every
+   line centered on t.x) -- left-aligned default textarea styling made each
+   new line after Enter look off, since what you typed didn't match what
+   was about to render. */
+.text-card textarea {
+  text-align: center;
+}
 /* Marks which text a canvas tap (or focusing one of its own fields)
    selected, since with several overlays it's otherwise not obvious which
    card belongs to the one you just tapped on the video. */
@@ -1670,9 +1835,6 @@ header {
   .page-heading .primary {
     padding: 10px;
   }
-  .import-strip {
-    padding: 18px;
-  }
 }
 @media (max-width: 800px) {
   .sidebar {
@@ -1724,12 +1886,6 @@ header {
   }
   .local-label {
     display: none;
-  }
-  .import-strip {
-    flex-wrap: wrap;
-  }
-  .import-strip > .subtle {
-    margin-left: 0;
   }
   .page-heading {
     align-items: flex-start;
@@ -1787,9 +1943,6 @@ header {
   .thumbnail {
     height: 280px;
   }
-  .upload-card {
-    min-height: 240px;
-  }
   .notice {
     margin: 12px 15px;
   }
@@ -1822,9 +1975,6 @@ header {
   .modal-backdrop {
     padding: 15px;
   }
-  .import-strip strong {
-    font-size: 14px;
-  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -1839,7 +1989,14 @@ header {
 .sheet-header {
   display: none;
 }
+/* Desktop's tab rail is a fixed-width column (see .edit-workspace) that
+   can't fit six icon+label buttons on one line without the last one
+   overflowing and getting clipped by .inspector's overflow:hidden -- the
+   title attribute already on each button covers discoverability, so drop
+   the label here and bring it back only where the rail has real room
+   (mobile's full-width vertical rail, below). */
 .tool-tab-label {
+  display: none;
   font-size: 11px;
   font-weight: 600;
 }
@@ -2150,6 +2307,11 @@ header {
   .tool-tabs button.active {
     background: #333e2b;
   }
+  /* The rail has real room here (each button is its own 52px+ square), so
+     bring the label back -- unlike the cramped desktop row above. */
+  .tool-tab-label {
+    display: block;
+  }
   /* Collapsed by default so the timeline stays visible until a tool is picked. */
   .tool-body {
     display: none;
@@ -2243,9 +2405,8 @@ header {
   .page-heading p {
     font-size: 13px;
   }
-  .import-strip {
-    padding: 14px;
-    gap: 12px;
+  .import-hero {
+    padding: 24px 16px;
     margin-bottom: 20px;
   }
   .page-heading > .primary {
@@ -2260,6 +2421,16 @@ header {
     gap: 16px;
     overflow-x: auto;
     scrollbar-width: none;
+    /* Fades the last tab toward the edge as a scroll hint -- there's no
+       other affordance once native scrollbars are hidden above, and with
+       a name like "Instruments removed" the row runs past the viewport on
+       a phone. */
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - 24px),
+      transparent
+    );
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
   }
   .tabs::-webkit-scrollbar {
     display: none;

@@ -2,9 +2,6 @@ import type { Metadata, Viewport } from "next";
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
-import "@fontsource/dm-sans/700.css";
-import "@fontsource/montserrat/700.css";
-import "@fontsource/roboto/700.css";
 import "./globals.css";
 export const metadata: Metadata = {
   title: "Frame / Editing Studio",

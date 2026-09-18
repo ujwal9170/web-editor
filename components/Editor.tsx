@@ -26,8 +26,15 @@ import {
   RotateCcw,
   Check,
   RefreshCw,
+  LayoutTemplate,
+  Minus,
 } from "lucide-react";
-import { api, fileUrl, clock, awaitJob } from "@/lib/api";
+// Only the editor's Text tab ever renders these -- loaded here instead of
+// the root layout so pages that never open the editor never pay for them.
+import "@fontsource/dm-sans/700.css";
+import "@fontsource/montserrat/700.css";
+import "@fontsource/roboto/700.css";
+import { api, fileUrl, clock, awaitJob, LAST_TEMPLATE_KEY } from "@/lib/api";
 import { cropGeometry } from "@/shared/export.mjs";
 import {
   preview,
@@ -40,7 +47,7 @@ import {
   measureOverlay,
   type Crop as CropRect,
 } from "@/lib/canvas";
-import type { Edit, Media, Overlay, Project } from "@/lib/types";
+import type { Edit, Media, Overlay, Project, Template } from "@/lib/types";
 import type { ExportTask } from "@/lib/useDeviceExports";
 
 export default function Editor({
@@ -90,7 +97,9 @@ export default function Editor({
     [selectedTextId, setSelectedTextId] = useState<string | null>(null),
     [videoMenuOpen, setVideoMenuOpen] = useState(false),
     [mediaPicker, setMediaPicker] = useState<Media[] | null>(null),
-    [replacing, setReplacing] = useState(false);
+    [replacing, setReplacing] = useState(false),
+    [templateStripOpen, setTemplateStripOpen] = useState(false),
+    [templates, setTemplates] = useState<Template[] | null>(null);
   const video = useRef<HTMLVideoElement>(null),
     derived = useRef<HTMLAudioElement>(null),
     canvas = useRef<HTMLCanvasElement>(null),
@@ -257,7 +266,7 @@ export default function Editor({
     const name = prompt("Name this template:");
     if (!name?.trim()) return;
     try {
-      await api("/templates", {
+      const t = await api<Template>("/templates", {
         method: "POST",
         body: JSON.stringify({
           name: name.trim(),
@@ -270,9 +279,60 @@ export default function Editor({
           },
         }),
       });
+      setTemplates((cur) => (cur ? [...cur, t] : cur));
     } catch (e: any) {
       onError(e.message);
     }
+  }
+  function toggleTemplateStrip() {
+    const next = !templateStripOpen;
+    setTemplateStripOpen(next);
+    if (!next) return;
+    // Opening the strip retires whatever tool panel was showing (Crop's
+    // included) rather than floating on top of it -- on desktop that panel
+    // has no "closed" state of its own (it's always visible, switching only
+    // by tab), so hiding it while the strip is open is handled purely by
+    // the .inspector.template-open CSS rule below.
+    setSheetOpen(false);
+    exitFreehand();
+    setLiveTextPos(null);
+    setSelectedTextId(null);
+    if (templates === null)
+      api<Template[]>("/templates")
+        .then(setTemplates)
+        .catch((e) => onError(e.message));
+  }
+  // Applies a template's crop/background/text to THIS clip, in place --
+  // unlike starting a new project from a template, segments and audio mode
+  // stay untouched since they're this specific edit's own. Text overlays
+  // carry no timing in a template, so they span the whole clip here too.
+  function applyTemplate(t: Template) {
+    setTemplateStripOpen(false);
+    setFreehand(false);
+    setLiveCrop(null);
+    setSelectedTextId(null);
+    setLiveTextPos(null);
+    const durationMs = duration * 1000;
+    change({
+      ...edit,
+      canvas: t.edit.canvas,
+      crop: t.edit.crop,
+      textOverlays: t.edit.textOverlays.map((o) => ({
+        ...o,
+        startMs: 0,
+        endMs: durationMs,
+      })),
+    });
+    try {
+      localStorage.setItem(LAST_TEMPLATE_KEY, t.id);
+    } catch {}
+  }
+  function deleteTemplateInline(t: Template) {
+    if (!confirm(`Delete template "${t.name}"? This cannot be undone.`))
+      return;
+    api(`/templates/${t.id}`, { method: "DELETE" })
+      .then(() => setTemplates((cur) => cur?.filter((x) => x.id !== t.id) ?? cur))
+      .catch((e: any) => onError(e.message));
   }
   function updateOverlay(id: string, changes: Partial<Overlay>) {
     change({
@@ -357,6 +417,14 @@ export default function Editor({
     const carriedEdit: Edit = {
       ...edit,
       segments,
+      // Old timings are meaningless against a different clip's length (and
+      // can fail validation outright if the new clip is shorter) -- so, like
+      // applying a template, every text just spans the new clip in full.
+      textOverlays: edit.textOverlays.map((t) => ({
+        ...t,
+        startMs: 0,
+        endMs: durationMs,
+      })),
       audio:
         edit.audio.mode === "original"
           ? edit.audio
@@ -377,6 +445,14 @@ export default function Editor({
         revision.current = p.revision;
         committed.current = JSON.stringify(snapshot);
         if (alive.current) {
+          // onSaved's remount (see app/page.tsx's key) can tear this
+          // instance down before it ever re-renders with carriedEdit --
+          // updating latest.current eagerly, not just via the render that
+          // may never come, keeps it matching committed.current so the
+          // unmount-flush effect above doesn't see a false "unsaved change"
+          // and refire a PATCH with this instance's now-stale pre-replace
+          // edit against the new (and possibly shorter) clip's duration.
+          latest.current = snapshot;
           setEdit(carriedEdit);
           onSaved(p);
         }
@@ -780,6 +856,7 @@ export default function Editor({
               // part of adjusting it there, not an "outside" tap dismissing
               // the sheet. With no sheet open, the same tap just
               // deactivates whichever text is selected.
+              if (templateStripOpen) setTemplateStripOpen(false);
               if (sheetOpen && !freehand) {
                 closeSheet();
               } else if (selectedTextId) {
@@ -909,7 +986,14 @@ export default function Editor({
             <button
               aria-label={playing ? "Pause video" : "Play video"}
               className="play-button"
-              onClick={() => toggle().catch((e) => onError(e.message))}
+              onClick={() =>
+                toggle().catch((e) => {
+                  // A play() call the browser itself aborted because a
+                  // pause() (often just a fast second tap) landed before it
+                  // resolved -- expected, not an error worth alarming over.
+                  if (e?.name !== "AbortError") onError(e.message);
+                })
+              }
             >
               {playing ? <Pause size={15} /> : <Play size={15} />}
             </button>
@@ -1021,44 +1105,61 @@ export default function Editor({
             </p>
           </div>
         </div>
-        <aside className={`inspector ${sheetOpen ? "sheet-open" : ""}`}>
+        <aside
+          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}`}
+        >
           <div className="tool-tabs">
             {[
               ["crop", Crop, "Crop"],
+              ["template", LayoutTemplate, "Templates"],
               ["text", Type, "Text"],
               ["background", Palette, "Colour"],
               ["audio", Music2, "Audio"],
               ["caption", Captions, "Caption"],
-            ].map(([key, Icon, label]: any) => (
-              <button
-                key={key}
-                title={label}
-                aria-label={`${label} tools`}
-                className={tab === key ? "active" : ""}
-                onClick={() => {
-                  // On mobile the same tab acts as a toggle for its sheet,
-                  // which is how CapCut/InShot behave; on desktop the panel
-                  // is always visible so this only ever switches tabs.
-                  if (tab === key) {
-                    setSheetOpen((v) => !v);
-                    exitFreehand();
-                    setLiveTextPos(null);
-                    setSelectedTextId(null);
-                  } else {
-                    setTab(key);
-                    setSheetOpen(true);
-                    if (key !== "crop") exitFreehand();
-                    if (key !== "text") {
+            ].map(([key, Icon, label]: any) =>
+              key === "template" ? (
+                <button
+                  key={key}
+                  title={label}
+                  aria-label={`${label} strip`}
+                  className={templateStripOpen ? "active" : ""}
+                  onClick={toggleTemplateStrip}
+                >
+                  <Icon size={21} />
+                  <span className="tool-tab-label">{label}</span>
+                </button>
+              ) : (
+                <button
+                  key={key}
+                  title={label}
+                  aria-label={`${label} tools`}
+                  className={tab === key && !templateStripOpen ? "active" : ""}
+                  onClick={() => {
+                    // On mobile the same tab acts as a toggle for its sheet,
+                    // which is how CapCut/InShot behave; on desktop the panel
+                    // is always visible so this only ever switches tabs.
+                    setTemplateStripOpen(false);
+                    if (tab === key) {
+                      setSheetOpen((v) => !v);
+                      exitFreehand();
                       setLiveTextPos(null);
                       setSelectedTextId(null);
+                    } else {
+                      setTab(key);
+                      setSheetOpen(true);
+                      if (key !== "crop") exitFreehand();
+                      if (key !== "text") {
+                        setLiveTextPos(null);
+                        setSelectedTextId(null);
+                      }
                     }
-                  }
-                }}
-              >
-                <Icon size={21} />
-                <span className="tool-tab-label">{label}</span>
-              </button>
-            ))}
+                  }}
+                >
+                  <Icon size={21} />
+                  <span className="tool-tab-label">{label}</span>
+                </button>
+              ),
+            )}
           </div>
           <div className="tool-body">
             <div className="sheet-header">
@@ -1339,7 +1440,7 @@ export default function Editor({
                           color: "#FFFFFF",
                           size: 56,
                           x: 0.5,
-                          y: 0.15,
+                          y: 0.5,
                           startMs: 0,
                           endMs: duration * 1000,
                         },
@@ -1571,6 +1672,60 @@ export default function Editor({
           onClick={() => setExportMenuOpen(false)}
         />
       )}
+      {templateStripOpen && (
+        <>
+          <div
+            className="menu-overlay"
+            onClick={() => setTemplateStripOpen(false)}
+          />
+          <div
+            className="template-strip"
+            role="dialog"
+            aria-label="Templates"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="template-strip-item">
+              <button
+                className="template-strip-add"
+                aria-label="Save current look as a template"
+                title="Save current look as a template"
+                onClick={saveAsTemplate}
+              >
+                <Plus size={18} />
+              </button>
+              <span className="template-strip-name">Save new</span>
+            </div>
+            {templates === null ? (
+              <LoaderCircle className="spin" size={18} />
+            ) : templates.length === 0 ? (
+              <span className="template-strip-hint">No templates yet</span>
+            ) : (
+              templates.map((t) => (
+                <div className="template-strip-item" key={t.id}>
+                  <button
+                    className="template-strip-swatch"
+                    title={t.name}
+                    aria-label={`Apply template ${t.name}`}
+                    style={{
+                      background:
+                        t.edit.canvas.background.colors[0] ?? "#111827",
+                    }}
+                    onClick={() => applyTemplate(t)}
+                  />
+                  <button
+                    className="template-strip-remove"
+                    aria-label={`Delete template ${t.name}`}
+                    onClick={() => deleteTemplateInline(t)}
+                  >
+                    <Minus size={8} />
+                  </button>
+                  <span className="template-strip-name">{t.name}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
       {videoMenuOpen && (
         <div
           className="modal-backdrop"
@@ -1637,7 +1792,12 @@ export default function Editor({
                       }
                     }}
                   >
-                    <img src={fileUrl("media", m.id, "thumbnail")} alt={m.name} />
+                    <img
+                      src={fileUrl("media", m.id, "thumbnail")}
+                      alt={m.name}
+                      loading="lazy"
+                      decoding="async"
+                    />
                     <span>{m.name}</span>
                   </button>
                 ))}
@@ -1782,6 +1942,11 @@ function CropOverlay({
 // tap that never moves past the threshold selects the text (so its card
 // scrolls into view in the panel) instead of "dragging" it by zero.
 const TAP_THRESHOLD = 4;
+// Platforms this gets reposted to (Instagram/TikTok/YouTube Shorts) all
+// overlay their own username/follow chrome across the top of a 9:16 frame --
+// text dragged up there gets visually clipped by that chrome, not by us, so
+// it's kept out of reach entirely rather than just discouraged.
+const TOP_SAFE_ZONE = 0.1;
 function TextDragHandle({
   x,
   y,
@@ -1814,6 +1979,7 @@ function TextDragHandle({
     boxHeight: number;
     moved: boolean;
   } | null>(null);
+  const [dragging, setDragging] = useState(false);
   function down(e: ReactPointerEvent<HTMLDivElement>) {
     e.preventDefault();
     // Stops the preview stage's own pointerdown (which deselects whatever
@@ -1832,6 +1998,7 @@ function TextDragHandle({
       boxHeight: rect.height,
       moved: false,
     };
+    setDragging(true);
   }
   function move(e: ReactPointerEvent<HTMLDivElement>) {
     const d = drag.current;
@@ -1845,43 +2012,57 @@ function TextDragHandle({
     )
       return;
     d.moved = true;
+    // Capped at 0.9 rather than 1 -- dragging text flush to the video's
+    // right/bottom edge crops it against safe-zone overlays (captions, UI
+    // chrome) on most platforms it gets reposted to. The top edge has its
+    // own floor: the box's own half-height keeps its rendered footprint (not
+    // just its center point) out of TOP_SAFE_ZONE entirely.
+    const minY = TOP_SAFE_ZONE + height / 2;
     onChange(
-      Math.min(1, Math.max(0, d.startVX + pixelDx / d.boxWidth)),
-      Math.min(1, Math.max(0, d.startVY + pixelDy / d.boxHeight)),
+      Math.min(0.9, Math.max(0, d.startVX + pixelDx / d.boxWidth)),
+      Math.min(0.9, Math.max(minY, d.startVY + pixelDy / d.boxHeight)),
     );
   }
   function up() {
     if (drag.current?.moved) onCommit();
     else if (drag.current) onTap();
     drag.current = null;
+    setDragging(false);
   }
   return (
-    <div
-      className={`text-drag-handle${selected ? " selected" : ""}`}
-      style={{
-        left: `${x * 100}%`,
-        top: `${y * 100}%`,
-        width: `${width * 100}%`,
-        height: `${height * 100}%`,
-      }}
-      onPointerDown={down}
-      onPointerMove={move}
-      onPointerUp={up}
-      onPointerCancel={up}
-    >
-      {selected && (
-        <button
-          className="text-drag-delete"
-          aria-label="Delete this text"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-        >
-          <Trash2 size={12} />
-        </button>
+    <>
+      {dragging && (
+        <div className="text-safe-zone" aria-hidden="true">
+          <span>Stays clear of platform UI</span>
+        </div>
       )}
-    </div>
+      <div
+        className={`text-drag-handle${selected ? " selected" : ""}`}
+        style={{
+          left: `${x * 100}%`,
+          top: `${y * 100}%`,
+          width: `${width * 100}%`,
+          height: `${height * 100}%`,
+        }}
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+      >
+        {selected && (
+          <button
+            className="text-drag-delete"
+            aria-label="Delete this text"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
+      </div>
+    </>
   );
 }
