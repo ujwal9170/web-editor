@@ -46,7 +46,12 @@ export default function MediaCard({
         disabled={m.status !== "ready"}
       >
         {m.status === "ready" ? (
-          <img src={fileUrl("media", m.id, "thumbnail")} alt={m.name} />
+          <img
+            src={fileUrl("media", m.id, "thumbnail")}
+            alt={m.name}
+            loading="lazy"
+            decoding="async"
+          />
         ) : (
           <div className="placeholder">
             <Film />

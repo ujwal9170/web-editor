@@ -31,6 +31,8 @@ export default function ProjectCard({
           <img
             src={fileUrl("media", project.mediaId, "thumbnail")}
             alt={project.name}
+            loading="lazy"
+            decoding="async"
             onError={() => setImageFailed(true)}
           />
         ) : (
