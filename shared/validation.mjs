@@ -194,7 +194,7 @@ export function initialEdit(durationMs) {
     version: 1,
     canvas: {
       aspectRatio: "9:16",
-      background: { type: "solid", colors: ["#111827", "#7C3AED"], angle: 135 },
+      background: { type: "solid", colors: ["#000000", "#000000"], angle: 135 },
     },
     crop: { x: 0, y: 0, width: 1, height: 1 },
     segments: [{ startMs: 0, endMs: durationMs, enabled: true }],
