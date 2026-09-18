@@ -32,7 +32,11 @@ import { useDeviceExports } from "@/lib/useDeviceExports";
 import CaptionPreview from "@/components/CaptionPreview";
 import ShareExport from "@/components/ShareExport";
 import { rememberedExport, rememberedExportSync } from "@/lib/exportBlobs";
-import { videoFileName, shareVideoFile } from "@/shared/file-share.mjs";
+import {
+  videoFileName,
+  shareVideoFile,
+  canShareFiles,
+} from "@/shared/file-share.mjs";
 import ProjectCard from "@/components/ProjectCard";
 import MediaCard from "@/components/MediaCard";
 import { useWebMCP } from "@/lib/useWebMCP";
@@ -290,7 +294,11 @@ export default function Studio() {
   // export made elsewhere, one aged out of storage, a browser without file
   // sharing, or a share the browser refuses.
   function shareNow(item: Export) {
-    const blob = rememberedExportSync(item.id);
+    // Desktop can't hand a file to another app at all, so don't attempt it
+    // and land on a download nobody asked for -- the dialog says so instead.
+    const blob = canShareFiles(navigator)
+      ? rememberedExportSync(item.id)
+      : null;
     if (!blob) return setShareExport(item);
     try {
       const file = new File([blob], videoFileName(item.name), {

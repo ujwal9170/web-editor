@@ -5,7 +5,7 @@ import { Download, LoaderCircle, Share2, X } from "lucide-react";
 import { fileUrl } from "@/lib/api";
 import { rememberedExport } from "@/lib/exportBlobs";
 import type { Export } from "@/lib/types";
-import { videoFileName, shareVideoFile } from "@/shared/file-share.mjs";
+import { videoFileName, shareVideoFile, canShareFiles } from "@/shared/file-share.mjs";
 
 export default function ShareExport({
   item,
@@ -27,13 +27,12 @@ export default function ShareExport({
     element.showModal();
     async function prepare() {
       try {
-        if (
-          !window.isSecureContext ||
-          !navigator.share ||
-          !navigator.canShare
-        ) {
+        if (!window.isSecureContext || !canShareFiles(navigator)) {
+          // Said plainly rather than discovered by failing: desktop Chrome
+          // and Edge cannot pass a file to an app, whatever canShare() claims,
+          // so offering a share button here only produces a dead end.
           setStatus(
-            "File sharing is unavailable in this browser. Download the MP4 and attach it in Telegram.",
+            "Desktop browsers can't send a file to another app — only phones can. Open this page on your phone to share straight into Telegram. Downloading here still works.",
           );
           return;
         }
