@@ -1038,9 +1038,19 @@ header {
   gap: 10px;
   font-size: 12px;
 }
+/* A default checkbox renders about 13px square, which is well under the 44px
+   a thumb needs -- and this one gates the whole import, so missing it is the
+   difference between importing and not. */
 .check input {
   margin: 0;
   flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+}
+.check {
+  min-height: 44px;
+  align-items: center;
 }
 .divider {
   text-align: center;
@@ -2232,9 +2242,22 @@ header {
     padding: 6px 16px;
     font-size: 12px;
   }
+  /* Play/pause and the scrubber are the two controls a phone reaches for
+     most, and both sat at 34px -- ten short of what a thumb reliably hits. */
   .play-button {
-    width: 34px;
-    height: 34px;
+    width: 44px;
+    height: 44px;
+  }
+  .scrub-bar,
+  .timeline-scrub {
+    min-height: 44px;
+  }
+  .project-name {
+    min-height: 44px;
+  }
+  .avatar {
+    width: 40px;
+    height: 40px;
   }
 
   /* Timeline: bigger clips and a scrubber that a thumb can actually grab.

@@ -1096,6 +1096,7 @@ export default function Editor({
             </div>
             <input
               aria-label="Timeline playhead"
+              className="timeline-scrub"
               type="range"
               min="0"
               max={duration}
