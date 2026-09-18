@@ -108,7 +108,7 @@ export function useDeviceExports() {
             if (state.status === "ready") {
               // Hold on to what was just rendered so sharing it doesn't have
               // to fetch the same bytes back down again.
-              rememberExport(state.resultId, result.blob);
+              void rememberExport(state.resultId, result.blob).catch(() => {});
               return state.resultId;
             }
             if (state.status === "failed") throw new Error(state.error);

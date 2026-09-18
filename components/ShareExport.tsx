@@ -47,7 +47,7 @@ export default function ShareExport({
         // case there is nothing to prepare -- downloading it back from the
         // server is how "Preparing MP4" used to sit there for minutes on a
         // phone, re-fetching bytes it had just finished uploading.
-        let blob = rememberedExport(item.id);
+        let blob = await rememberedExport(item.id);
         if (!blob) {
           const response = await fetch(fileUrl("export", item.id, "file"), {
             credentials: "same-origin",
@@ -108,8 +108,8 @@ export default function ShareExport({
     let pending: Promise<void>;
     try {
       pending = shareVideoFile(navigator, file);
-    } catch (error) {
-      report(error);
+    } catch {
+      saveToDevice("This browser can't share files.");
       return;
     }
     setSharing(true);
@@ -122,19 +122,35 @@ export default function ShareExport({
       .catch(report)
       .finally(() => setSharing(false));
   }
+  // Saves straight from the file already in hand -- no request, no waiting.
+  function saveToDevice(because: string) {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    setStatus(`${because} The MP4 is saved to this device — attach it from your downloads.`);
+  }
   function report(error: unknown) {
-    // Anything but a cancel names what actually went wrong. "Sharing could
-    // not open" on its own gave no way to tell a browser that refuses the
-    // file from one that lost the tap's user activation from one that ran
-    // out of memory -- three different problems with three different fixes.
     const name = error instanceof Error ? error.name : "";
     const detail = error instanceof Error ? error.message : String(error);
-    setStatus(
-      name === "AbortError"
-        ? "Sharing cancelled. You can try again."
-        : name === "NotAllowedError"
-          ? "Android blocked the share because the tap wasn't registered in time. Tap Share MP4 once more — or use Download MP4 and attach it."
-          : `Sharing could not open — ${name || "error"}: ${detail.slice(0, 160)}. Try again, or download the MP4 and attach it in Telegram.`,
+    // A cancel is the one case where the person already got what they asked
+    // for: they opened the sheet and backed out. Everything else means the
+    // handover failed, and no amount of retrying fixes a browser that will
+    // not pass files to the OS -- desktop Chrome and Edge report
+    // canShare({files}) as true and then refuse the share itself. Rather
+    // than explaining that and leaving them to press a second button, the
+    // file just gets saved. Whatever goes wrong, they end up with the video.
+    if (name === "AbortError") {
+      setStatus("Sharing cancelled. Tap Share MP4 to try again.");
+      return;
+    }
+    saveToDevice(
+      name === "NotAllowedError"
+        ? "This browser wouldn't hand the file to the share menu."
+        : `Sharing failed (${name || "error"}: ${detail.slice(0, 90)}).`,
     );
   }
 
@@ -170,9 +186,17 @@ export default function ShareExport({
           )}
           {loading ? "Preparing…" : sharing ? "Sharing…" : "Share MP4"}
         </button>
-        <a className="subtle" href={fileUrl("export", item.id, "file", true)}>
-          <Download size={18} /> Download MP4
-        </a>
+        {file ? (
+          // Saves the copy already in memory rather than asking the server
+          // for bytes this device is holding.
+          <button className="subtle" onClick={() => saveToDevice("Saved.")}>
+            <Download size={18} /> Download MP4
+          </button>
+        ) : (
+          <a className="subtle" href={fileUrl("export", item.id, "file", true)}>
+            <Download size={18} /> Download MP4
+          </a>
+        )}
       </div>
     </dialog>
   );

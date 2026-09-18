@@ -31,6 +31,8 @@ import DeviceExportQueue from "@/components/DeviceExportQueue";
 import { useDeviceExports } from "@/lib/useDeviceExports";
 import CaptionPreview from "@/components/CaptionPreview";
 import ShareExport from "@/components/ShareExport";
+import { rememberedExport, rememberedExportSync } from "@/lib/exportBlobs";
+import { videoFileName, shareVideoFile } from "@/shared/file-share.mjs";
 import ProjectCard from "@/components/ProjectCard";
 import MediaCard from "@/components/MediaCard";
 import { useWebMCP } from "@/lib/useWebMCP";
@@ -270,6 +272,35 @@ export default function Studio() {
       setError(e.message);
     } finally {
       setBusy(false);
+    }
+  }
+  // Recent exports are pulled off disk into memory as soon as the list is
+  // known, so the share button below has something to hand over the instant
+  // it's tapped rather than starting a download at that point.
+  useEffect(() => {
+    for (const item of exports.slice(0, 3))
+      void rememberedExport(item.id).catch(() => {});
+  }, [exports]);
+  // One tap, no waiting: if this device still holds the file it rendered, the
+  // OS share sheet opens from this tap directly. navigator.share() has to run
+  // inside the gesture, so the lookup is the synchronous one and the call is
+  // the first thing that happens -- anything else here (an await, a setState
+  // and its re-render) spends the tap's activation and Android refuses with
+  // NotAllowedError. The dialog is the fallback for everything else: an
+  // export made elsewhere, one aged out of storage, a browser without file
+  // sharing, or a share the browser refuses.
+  function shareNow(item: Export) {
+    const blob = rememberedExportSync(item.id);
+    if (!blob) return setShareExport(item);
+    try {
+      const file = new File([blob], videoFileName(item.name), {
+        type: "video/mp4",
+      });
+      shareVideoFile(navigator, file).catch((error: any) => {
+        if (error?.name !== "AbortError") setShareExport(item);
+      });
+    } catch {
+      setShareExport(item);
     }
   }
   function lastTemplateId(): string | undefined {
@@ -1107,7 +1138,7 @@ export default function Studio() {
                             <button
                               title="Share video file"
                               aria-label={`Share ${x.name} as a video file`}
-                              onClick={() => setShareExport(x)}
+                              onClick={() => shareNow(x)}
                             >
                               <Share2 size={18} />
                             </button>
