@@ -128,6 +128,65 @@ export function measureOverlay(
 // CanvasImageSource, so the exact same crop/scale/overlay math produces
 // pixel-identical output whether the frame source is a <video> or a decoded
 // export frame.
+// Smallest blur box that's still grabbable by its handles on a phone.
+export const MIN_BLUR = 0.06;
+// Intensity is a 1-100 dial, not a pixel count: the same setting has to look
+// the same at 720p and 1080p, so it resolves against the canvas width rather
+// than being stored as pixels.
+export function blurRadius(intensity: number, width: number) {
+  return Math.max(1, (intensity / 100) * 0.07 * width);
+}
+let scratch: OffscreenCanvas | HTMLCanvasElement | null = null;
+function scratchCanvas(w: number, h: number) {
+  if (!scratch)
+    scratch =
+      typeof OffscreenCanvas === "function"
+        ? new OffscreenCanvas(w, h)
+        : document.createElement("canvas");
+  scratch.width = w;
+  scratch.height = h;
+  return scratch;
+}
+// Blurs one rectangle of whatever is already on the canvas. Runs after the
+// frame is drawn and before any text, so it hides footage without smearing
+// the caption sitting over it.
+export function blurRegion(
+  ctx: Context2D,
+  edit: Edit,
+  width: number,
+  height: number,
+) {
+  const b = edit.blur;
+  if (!b) return;
+  const radius = blurRadius(b.intensity, width);
+  const x = Math.round(b.x * width),
+    y = Math.round(b.y * height),
+    w = Math.max(1, Math.round(b.width * width)),
+    h = Math.max(1, Math.round(b.height * height));
+  // The region is copied out with a margin and blurred with that margin
+  // included, then clipped back to the exact rectangle. Blurring the bare
+  // rectangle instead would sample transparent pixels from beyond its edges
+  // and leave a pale halo just inside them.
+  const pad = Math.ceil(radius * 2);
+  const sx = Math.max(0, x - pad),
+    sy = Math.max(0, y - pad),
+    sw = Math.min(width - sx, w + (x - sx) + pad),
+    sh = Math.min(height - sy, h + (y - sy) + pad);
+  if (sw <= 0 || sh <= 0) return;
+  const buffer = scratchCanvas(sw, sh);
+  const bctx = buffer.getContext("2d") as Context2D | null;
+  if (!bctx) return;
+  bctx.clearRect(0, 0, sw, sh);
+  bctx.drawImage(ctx.canvas as CanvasImageSource, sx, sy, sw, sh, 0, 0, sw, sh);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.filter = `blur(${radius}px)`;
+  ctx.drawImage(buffer as CanvasImageSource, sx, sy);
+  ctx.filter = "none";
+  ctx.restore();
+}
 export function compose(
   ctx: Context2D,
   edit: Edit,
@@ -153,6 +212,7 @@ export function compose(
       g.drawHeight,
     );
   }
+  blurRegion(ctx, edit, width, height);
   edit.textOverlays
     .filter((t) => currentTimeMs >= t.startMs && currentTimeMs <= t.endMs)
     .forEach((t) => text(ctx, t, width, height));

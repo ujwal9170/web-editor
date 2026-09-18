@@ -19,6 +19,7 @@ import {
   exportTimeline,
   frameTimes,
 } from "../shared/export.mjs";
+import { blurRegion } from "./canvas";
 import type { RenderRequest, RenderArtwork } from "./deviceExport";
 
 // Dedicated worker: UI stays responsive and cancellation destroys decoders/encoders.
@@ -200,6 +201,9 @@ self.onmessage = async ({
           geometry.drawWidth,
           geometry.drawHeight,
         );
+        // Same call the preview makes, in the same place in the draw order,
+        // so what the blur hides on screen is what it hides in the file.
+        blurRegion(ctx, data.edit, width, height);
         for (const overlay of data.artwork.overlays) {
           if (
             time.sourceTime * 1000 >= overlay.startMs &&

@@ -41,6 +41,15 @@ export type Edit = {
   segments: Segment[];
   textOverlays: Overlay[];
   audio: { mode: string; derivativeId: string | null };
+  // Fractions of the finished canvas, not of the source -- see editSchema.
+  blur: BlurRegion | null;
+};
+export type BlurRegion = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  intensity: number;
 };
 // Reusable style preset: crop/background/text, no timing or a specific clip.
 export type Template = {

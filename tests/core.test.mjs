@@ -137,6 +137,46 @@ test("download API routes all three sources to the same import queue", async () 
   }
 });
 
+test("a blur region is optional, bounded, and survives a round trip", () => {
+  const edit = initialEdit(10000);
+  // Edits saved before blur existed carry no such key at all; they have to
+  // keep validating rather than being rejected as malformed.
+  const { blur, ...withoutBlur } = edit;
+  assert.equal(validateEdit(withoutBlur, 10000).blur, null);
+  const region = { x: 0.1, y: 0.2, width: 0.5, height: 0.25, intensity: 60 };
+  assert.deepEqual(validateEdit({ ...edit, blur: region }, 10000).blur, region);
+  for (const bad of [
+    { ...region, x: 0.8, width: 0.5 },
+    { ...region, y: 0.9, height: 0.5 },
+    { ...region, width: 0 },
+    { ...region, intensity: 0 },
+    { ...region, intensity: 101 },
+  ])
+    assert.throws(() => validateEdit({ ...edit, blur: bad }, 10000));
+});
+test("a blur covers the whole clip and outlives a swap to a shorter one", () => {
+  const region = { x: 0.1, y: 0.2, width: 0.5, height: 0.25, intensity: 60 };
+  const edit = { ...initialEdit(10000), blur: region };
+  // It carries no startMs/endMs of its own, unlike a text overlay -- there is
+  // no window it could fall outside of, so it is on every frame by
+  // construction rather than by being re-spanned.
+  assert.deepEqual(Object.keys(region).sort(), [
+    "height",
+    "intensity",
+    "width",
+    "x",
+    "y",
+  ]);
+  // Replacing the source clip re-spans text against the new duration; the
+  // blur needs no such treatment, so a much shorter clip must still validate
+  // with the region untouched.
+  const swapped = {
+    ...edit,
+    segments: [{ startMs: 0, endMs: 2000, enabled: true }],
+    textOverlays: [],
+  };
+  assert.deepEqual(validateEdit(swapped, 2000).blur, region);
+});
 test("edit validation rejects out-of-bounds crops, overlaps and an empty timeline", () => {
   const edit = initialEdit(10000);
   assert.deepEqual(validateEdit(edit, 10000), edit);

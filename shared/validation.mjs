@@ -68,6 +68,26 @@ export const editSchema = z.object({
     mode: z.enum(["original", "mute", "remove-vocals", "vocals-only"]),
     derivativeId: z.string().uuid().nullable(),
   }),
+  // One rectangle of the finished 9:16 frame to blur -- x/y/width/height are
+  // fractions of the CANVAS, like textOverlays and unlike crop (which selects
+  // source pixels), because what it hides is a thing the viewer sees in the
+  // final frame, wherever the footage under it happens to sit. Defaulted
+  // rather than required so every edit saved before this existed still
+  // validates as "no blur".
+  blur: z
+    .object({
+      x: unit,
+      y: unit,
+      width: unit.gt(0),
+      height: unit.gt(0),
+      intensity: z.number().min(1).max(100),
+    })
+    .refine(
+      (b) => b.x + b.width <= 1.001 && b.y + b.height <= 1.001,
+      "Blur region exceeds the frame",
+    )
+    .nullable()
+    .default(null),
 });
 export function validateEdit(raw, durationMs) {
   const spec = editSchema.parse(raw);
@@ -187,6 +207,10 @@ export function editFromTemplate(templateEdit, durationMs) {
       endMs: durationMs,
     })),
     audio: { mode: "original", derivativeId: null },
+    // Not part of a template: a blur hides something in one specific clip's
+    // footage, so carrying it onto a different clip would cover whatever
+    // happens to be at those coordinates there instead.
+    blur: null,
   };
 }
 export function initialEdit(durationMs) {
@@ -200,5 +224,6 @@ export function initialEdit(durationMs) {
     segments: [{ startMs: 0, endMs: durationMs, enabled: true }],
     textOverlays: [],
     audio: { mode: "original", derivativeId: null },
+    blur: null,
   };
 }

@@ -28,6 +28,7 @@ import {
   RefreshCw,
   LayoutTemplate,
   Minus,
+  Droplet,
 } from "lucide-react";
 // Only the editor's Text tab ever renders these -- loaded here instead of
 // the root layout so pages that never open the editor never pay for them.
@@ -44,10 +45,18 @@ import {
   dimensions,
   clampCrop,
   MIN_CROP,
+  MIN_BLUR,
   measureOverlay,
   type Crop as CropRect,
 } from "@/lib/canvas";
-import type { Edit, Media, Overlay, Project, Template } from "@/lib/types";
+import type {
+  Edit,
+  Media,
+  Overlay,
+  Project,
+  Template,
+  BlurRegion,
+} from "@/lib/types";
 import type { ExportTask } from "@/lib/useDeviceExports";
 
 export default function Editor({
@@ -89,6 +98,7 @@ export default function Editor({
     [deviceSupported, setDeviceSupported] = useState(false),
     [freehand, setFreehand] = useState(false),
     [liveCrop, setLiveCrop] = useState<CropRect | null>(null),
+    [liveBlur, setLiveBlur] = useState<BlurRegion | null>(null),
     [liveTextPos, setLiveTextPos] = useState<{
       id: string;
       x: number;
@@ -117,7 +127,8 @@ export default function Editor({
   // Kept off React state entirely -- read straight from the draw loop -- so
   // 60fps pointermove never touches the undo stack or autosave; only
   // pointerup commits a single change().
-  const liveOffset = useRef<{ x: number; y: number } | null>(null),
+  const liveBlurRef = useRef<BlurRegion | null>(null),
+    liveOffset = useRef<{ x: number; y: number } | null>(null),
     panDrag = useRef<{
       startX: number;
       startY: number;
@@ -484,6 +495,7 @@ export default function Editor({
     let frame: number;
     let lastEdit: Edit | null = null, lastTime = -1, lastDraw = 0, lastReady = -1;
     let lastPanX: number | null = null, lastPanY: number | null = null;
+    let lastBlur: BlurRegion | null = null;
     const draw = () => {
       const v = video.current,
         ctx = canvas.current?.getContext("2d");
@@ -508,15 +520,17 @@ export default function Editor({
         }
         const now = performance.now();
         const live = liveOffset.current;
+        const blur = liveBlurRef.current;
         if (
           now - lastDraw >= 32 &&
           (lastEdit !== current.current ||
             lastTime !== v.currentTime ||
             lastReady !== v.readyState ||
             lastPanX !== live?.x ||
-            lastPanY !== live?.y)
+            lastPanY !== live?.y ||
+            lastBlur !== blur)
         ) {
-          const drawEdit = live
+          let drawEdit = live
             ? {
                 ...current.current,
                 crop: {
@@ -526,6 +540,10 @@ export default function Editor({
                 },
               }
             : current.current;
+          // Mid-drag the committed edit still holds the old rectangle, so the
+          // preview has to be told about the one under the pointer or the
+          // blur would only catch up once the drag ended.
+          if (blur) drawEdit = { ...drawEdit, blur };
           preview(ctx, v, drawEdit);
           lastDraw = now;
           lastEdit = current.current;
@@ -533,6 +551,7 @@ export default function Editor({
           lastReady = v.readyState;
           lastPanX = live?.x ?? null;
           lastPanY = live?.y ?? null;
+          lastBlur = blur;
         }
       }
       frame = requestAnimationFrame(draw);
@@ -908,6 +927,22 @@ export default function Editor({
                 }}
               />
             )}
+            {tab === "blur" && (liveBlur ?? edit.blur) && (
+              <BlurOverlay
+                region={(liveBlur ?? edit.blur)!}
+                onChange={(b) => {
+                  liveBlurRef.current = b;
+                  setLiveBlur(b);
+                }}
+                onCommit={() => {
+                  setLiveBlur((b) => {
+                    if (b) change({ ...edit, blur: b });
+                    liveBlurRef.current = null;
+                    return null;
+                  });
+                }}
+              />
+            )}
             {tab === "crop" && !freehand && videoRect && (
               <div
                 className="crop-pan-outer"
@@ -1111,6 +1146,7 @@ export default function Editor({
           <div className="tool-tabs">
             {[
               ["crop", Crop, "Crop"],
+              ["blur", Droplet, "Blur"],
               ["template", LayoutTemplate, "Templates"],
               ["text", Type, "Text"],
               ["background", Palette, "Colour"],
@@ -1289,6 +1325,70 @@ export default function Editor({
                 >
                   <RotateCcw size={15} /> Reset crop
                 </button>
+              </>
+            )}
+            {tab === "blur" && (
+              <>
+                <h2>Blur</h2>
+                {edit.blur ? (
+                  <>
+                    <p className="hint">
+                      Drag the box on the video to move it, or its corners to
+                      resize.
+                    </p>
+                    <label>
+                      Intensity <span>{edit.blur.intensity}</span>
+                      <input
+                        type="range"
+                        min={1}
+                        max={100}
+                        value={edit.blur.intensity}
+                        onChange={(e) =>
+                          change({
+                            ...edit,
+                            blur: {
+                              ...edit.blur!,
+                              intensity: Number(e.target.value),
+                            },
+                          })
+                        }
+                      />
+                    </label>
+                    <button
+                      className="subtle wide"
+                      onClick={() => {
+                        liveBlurRef.current = null;
+                        setLiveBlur(null);
+                        change({ ...edit, blur: null });
+                      }}
+                    >
+                      <Trash2 size={15} /> Remove blur
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="hint">
+                      Hide a face, a logo or a handle behind a blurred box.
+                    </p>
+                    <button
+                      className="primary wide"
+                      onClick={() =>
+                        change({
+                          ...edit,
+                          blur: {
+                            x: 0.3,
+                            y: 0.4,
+                            width: 0.4,
+                            height: 0.2,
+                            intensity: 50,
+                          },
+                        })
+                      }
+                    >
+                      <Droplet size={15} /> Add blur box
+                    </button>
+                  </>
+                )}
               </>
             )}
             {tab === "background" && (
@@ -1926,6 +2026,114 @@ function CropOverlay({
           <span
             key={h}
             className={`crop-handle crop-handle-${h}`}
+            onPointerDown={down(h)}
+            onPointerMove={move}
+            onPointerUp={up}
+            onPointerCancel={up}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+// The blur rectangle, dragged and resized directly on the preview. Unlike
+// CropOverlay this sits on the 9:16 canvas box rather than the video's own
+// letterboxed rect, because the region is stored in canvas fractions.
+function BlurOverlay({
+  region,
+  onChange,
+  onCommit,
+}: {
+  region: BlurRegion;
+  onChange: (region: BlurRegion) => void;
+  onCommit: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const drag = useRef<{
+    handle: DragHandle | "move";
+    startX: number;
+    startY: number;
+    start: BlurRegion;
+    width: number;
+    height: number;
+  } | null>(null);
+  function down(handle: DragHandle | "move") {
+    return (e: ReactPointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const rect = box.current?.getBoundingClientRect();
+      if (!rect) return;
+      drag.current = {
+        handle,
+        startX: e.clientX,
+        startY: e.clientY,
+        start: region,
+        width: rect.width,
+        height: rect.height,
+      };
+    };
+  }
+  function move(e: ReactPointerEvent) {
+    const d = drag.current;
+    if (!d || d.width <= 0 || d.height <= 0) return;
+    const dx = (e.clientX - d.startX) / d.width,
+      dy = (e.clientY - d.startY) / d.height;
+    let { x, y, width, height } = d.start;
+    if (d.handle === "move") {
+      // Moving only ever translates: the box keeps its size and stops at the
+      // frame edges rather than being squashed against them.
+      x = Math.min(1 - width, Math.max(0, x + dx));
+      y = Math.min(1 - height, Math.max(0, y + dy));
+    } else {
+      // Each axis is clamped against the edge being dragged, so running out
+      // of room stops that edge instead of sliding the whole box: dragging
+      // the right edge into the frame edge must not drag the left one along
+      // with it.
+      if (d.handle.includes("l")) {
+        const right = d.start.x + d.start.width;
+        x = Math.min(right - MIN_BLUR, Math.max(0, x + dx));
+        width = right - x;
+      } else if (d.handle.includes("r"))
+        width = Math.min(1 - x, Math.max(MIN_BLUR, width + dx));
+      if (d.handle.includes("t")) {
+        const bottom = d.start.y + d.start.height;
+        y = Math.min(bottom - MIN_BLUR, Math.max(0, y + dy));
+        height = bottom - y;
+      } else if (d.handle.includes("b"))
+        height = Math.min(1 - y, Math.max(MIN_BLUR, height + dy));
+    }
+    onChange({ ...d.start, x, y, width, height });
+  }
+  function up() {
+    if (drag.current) onCommit();
+    drag.current = null;
+  }
+  const handles: DragHandle[] = ["tl", "tr", "bl", "br"];
+  return (
+    <div
+      className="blur-overlay"
+      ref={box}
+      aria-hidden="true"
+      style={{ aspectRatio: "9 / 16" }}
+    >
+      <div
+        className="blur-frame"
+        style={{
+          left: `${region.x * 100}%`,
+          top: `${region.y * 100}%`,
+          width: `${region.width * 100}%`,
+          height: `${region.height * 100}%`,
+        }}
+        onPointerDown={down("move")}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+      >
+        {handles.map((h) => (
+          <span
+            key={h}
+            className={`blur-handle blur-handle-${h}`}
             onPointerDown={down(h)}
             onPointerMove={move}
             onPointerUp={up}
