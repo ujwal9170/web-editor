@@ -980,6 +980,11 @@ export default function Editor({
                 region={(liveBlur ?? edit.blur)!}
                 active={tab === "blur"}
                 onGrab={() => setTab("blur")}
+                onDelete={() => {
+                  liveBlurRef.current = null;
+                  setLiveBlur(null);
+                  change({ ...edit, blur: null });
+                }}
                 onChange={(b) => {
                   liveBlurRef.current = b;
                   setLiveBlur(b);
@@ -2071,12 +2076,14 @@ function BlurOverlay({
   region,
   active,
   onGrab,
+  onDelete,
   onChange,
   onCommit,
 }: {
   region: BlurRegion;
   active: boolean;
   onGrab: () => void;
+  onDelete: () => void;
   onChange: (region: BlurRegion) => void;
   onCommit: () => void;
 }) {
@@ -2175,6 +2182,20 @@ function BlurOverlay({
         onPointerUp={up}
         onPointerCancel={up}
       >
+        {active && (
+          <button
+            className="overlay-delete blur-delete"
+            aria-label="Remove blur"
+            title="Remove blur"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+          >
+            <X size={14} />
+          </button>
+        )}
         {handles.map((h) => (
           <span
             key={h}
@@ -2328,15 +2349,16 @@ function TextDragHandle({
       >
         {selected && (
           <button
-            className="text-drag-delete"
+            className="overlay-delete text-drag-delete"
             aria-label="Delete this text"
+            title="Delete this text"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onDelete();
             }}
           >
-            <Trash2 size={12} />
+            <X size={14} />
           </button>
         )}
       </div>

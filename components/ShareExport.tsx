@@ -107,10 +107,16 @@ export default function ShareExport({
         "Video handed to the share menu. Complete sending in your chosen app.",
       );
     } catch (error) {
+      // Anything but a cancel names what actually went wrong. "Sharing could
+      // not open" on its own gave no way to tell a browser that refuses the
+      // file from one that lost the tap's user activation from one that ran
+      // out of memory -- three different problems with three different fixes.
+      const name = error instanceof Error ? error.name : "";
+      const detail = error instanceof Error ? error.message : String(error);
       setStatus(
-        error instanceof Error && error.name === "AbortError"
+        name === "AbortError"
           ? "Sharing cancelled. You can try again."
-          : "Sharing could not open. Try again, or download the MP4 and attach it in Telegram.",
+          : `Sharing could not open — ${name || "error"}: ${detail.slice(0, 160)}. Try again, or download the MP4 and attach it in Telegram.`,
       );
     } finally {
       setSharing(false);

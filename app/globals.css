@@ -1555,17 +1555,33 @@ header {
    you're already interacting with the text -- no need to scroll the panel
    to find "Remove text". stopPropagation on pointerdown keeps a tap here
    from also starting a drag on the handle underneath it. */
-.text-drag-delete {
+/* The cross that removes whatever is being touched -- same control on a text
+   overlay and on the blur box, so "get rid of this" is one gesture on the
+   video itself rather than a hunt through the matching tool panel. 30px with
+   a padded hit area: a 44px button would swallow a small overlay whole. */
+.overlay-delete {
   position: absolute;
-  top: -12px;
-  right: -12px;
-  width: 24px;
-  height: 24px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: #dc2626;
   color: #fff;
   border: 2px solid #1a1d20;
   pointer-events: auto;
+  touch-action: none;
+  box-shadow: 0 2px 8px #0009;
+  z-index: 3;
+}
+.text-drag-delete {
+  top: -15px;
+  right: -15px;
+}
+/* Clear of the corner handles, which sit centred on the corners themselves. */
+.blur-delete {
+  top: -40px;
+  right: -8px;
 }
 .playback {
   display: flex;
