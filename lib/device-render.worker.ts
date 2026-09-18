@@ -12,6 +12,7 @@ import {
   Mp4OutputFormat,
   canEncodeVideo,
   canEncodeAudio,
+  Quality,
 } from "mediabunny";
 import {
   cropGeometry,
@@ -152,7 +153,20 @@ self.onmessage = async ({
     };
     const videoSource = new CanvasSource(canvas, {
       codec: "avc",
-      bitrate,
+      // Constant-quality rather than a flat bitrate: a still, simple shot
+      // spends a fraction of the bits a busy one does, instead of every clip
+      // being poured into the same 8 Mbps regardless of whether it needs it.
+      // The file gets smaller because the easy parts stop being padded, not
+      // because quality was lowered -- the quantizer is what's held constant.
+      // bitrate stays on as a ceiling and, more importantly, as the fallback
+      // mediabunny uses where quantizer encoding isn't available (it only
+      // throws when no fallback is given). `quality` supersedes the
+      // deprecated `bitrate` field.
+      quality: new Quality({
+        quantizer: 21,
+        bitrate,
+        bitrateMode: "variable",
+      }),
       hardwareAcceleration,
       latencyMode,
       keyFrameInterval: 2,

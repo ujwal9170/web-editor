@@ -6,7 +6,13 @@ export function exportProfile(resolution = 720) {
     width: resolution,
     height: resolution === 720 ? 1280 : 1920,
     fps: 30,
-    bitrate: resolution === 720 ? 4_000_000 : 8_000_000,
+    // Not the target any more -- the export encodes to a constant quantizer
+    // (see device-render.worker.ts), so this is the ceiling and the fallback
+    // for encoders that can't do quantizer-driven encoding. 720p used to sit
+    // at 4 Mbps, which starved a busy shot at 720x1280 and is why 720p looked
+    // markedly worse than the same clip out of other editors; it now has room
+    // to spend what a hard frame needs, while an easy one still costs little.
+    bitrate: resolution === 720 ? 6_000_000 : 10_000_000,
   };
 }
 

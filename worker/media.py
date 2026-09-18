@@ -47,6 +47,31 @@ def normalize(source, target, info=None):
     info = info or probe(source)
     if not info['width']:
         raise ValueError('This file does not contain a video stream.')
+    # A clip pulled from Instagram/YouTube/TikTok is already H.264 in an MP4
+    # nearly every time, and re-encoding one of those costs minutes of CPU to
+    # produce a slightly worse copy of what we already had. When the source
+    # already satisfies everything the editor needs, remux instead -- same
+    # container work, no pixels touched, seconds instead of minutes. Anything
+    # that doesn't qualify (odd dimensions, VP9/AV1, Opus audio) still takes
+    # the full encode below, and so does a remux that fails to verify.
+    if (
+        info['mp4'] and info['h264']
+        and info['width'] % 2 == 0 and info['height'] % 2 == 0
+        and (info['aac'] or not info['hasAudio'])
+    ):
+        copy = ['-i', str(source)]
+        if not info['hasAudio']:
+            copy += ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-shortest']
+        copy += ['-map', '0:v:0', '-map', '0:a:0' if info['hasAudio'] else '1:a:0',
+                 '-t', str(info['duration']), '-c:v', 'copy']
+        copy += (['-c:a', 'copy'] if info['hasAudio']
+                 else ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2'])
+        copy += ['-movflags', '+faststart', str(target)]
+        try:
+            run(copy)
+            return probe(target)
+        except ValueError:
+            target.unlink(missing_ok=True)
     args = ['-i', str(source)]
     if not info['hasAudio']:
         args += ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo']
@@ -72,7 +97,17 @@ def download_options(job, root):
         'allowed_extractors': ['^instagram$', '^youtube$', '^tiktok$', '^vm\\.tiktok$'],
         'js_runtimes': {'node': {'path': os.environ.get('NODE_BINARY', 'node')}},
         'socket_timeout': 25, 'retries': 2,
-        'format': 'bestvideo*+bestaudio/best', 'merge_output_format': 'mp4',
+        # Reels and Shorts arrive as many small fragments, which yt-dlp fetches
+        # one at a time by default -- on a link with hundreds of them the
+        # transfer is round-trip bound rather than bandwidth bound, and the
+        # connection sits idle between each one.
+        'concurrent_fragment_downloads': 8,
+        # Prefer a stream that is already H.264 in MP4 so normalize() can remux
+        # it instead of re-encoding (see normalize()); the generic best-quality
+        # selectors stay as fallbacks, so nothing becomes undownloadable, it
+        # just costs an encode when the nice format isn't offered.
+        'format': 'bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/bestvideo*+bestaudio/best',
+        'merge_output_format': 'mp4',
         'ffmpeg_location': FFMPEG, 'max_filesize': 300 * 1024 * 1024,
         'outtmpl': str(root / (job['id'] + '-download.%(ext)s')),
         'match_filter': download_limit,
