@@ -114,12 +114,7 @@ export async function createApp({
       req.headers["sec-fetch-site"] === "cross-site"
     )
       return reply.code(403).send({ error: "Cross-site request rejected" });
-    if (
-      req.url.startsWith("/api/auth") ||
-      req.url === "/api/health" ||
-      req.url.startsWith("/api/share/")
-    )
-      return;
+    if (req.url.startsWith("/api/auth") || req.url === "/api/health") return;
     const session = currentSession(req);
     if (!session)
       return reply.code(401).send({ error: "Sign in to the workspace." });
@@ -823,26 +818,6 @@ export async function createApp({
     const item = get("export", req.params.id, req);
     await deleteExport(item);
     return { ok: true };
-  });
-  // Deliberately unauthenticated (see the onRequest hook's /api/share/
-  // bypass above) -- this is the one link Telegram itself can open on any
-  // device without a session, which is the whole point of a share button.
-  // Keyed on the export's own id: exports already use random UUIDs, so
-  // there's no separate token to mint, store or revoke -- it just stops
-  // working the moment the export itself expires or is deleted, same as
-  // every other export lifecycle already works.
-  app.get("/api/share/:id", (req, reply) => {
-    const parsed = z.string().uuid().safeParse(req.params.id);
-    const item = parsed.success && repo.get("export", parsed.data);
-    if (!item || item.expiresAt < Date.now())
-      return reply.code(404).send({ error: "Not found" });
-    if (!item.file || !existsSync(path.join(root, item.file)))
-      return reply.code(404).send({ error: "File unavailable" });
-    reply.header(
-      "Content-Disposition",
-      `inline; filename="${item.id}${path.extname(item.file)}"`,
-    );
-    return reply.sendFile(item.file, { cacheControl: false });
   });
   app.get("/api/files/:kind/:id/:type", (req, reply) => {
     const { kind, id, type } = req.params;
