@@ -597,6 +597,16 @@ export default function Editor({
   // without ever hard-locking there -- the position always stays a free
   // blend of the raw pointer position and center, so it can still be
   // dragged away.
+  // A tap on bare stage (or on the video that isn't a drag) means "I'm done
+  // with that tool". Closing the sheet was only ever half of it: on desktop
+  // there is no sheet, so the panel and its highlighted tab stayed lit with
+  // no way to put them away.
+  function retireTool() {
+    if (sheetOpen) closeSheet();
+    setTab("");
+    setSelectedTextId(null);
+    setLiveTextPos(null);
+  }
   function panDown(e: ReactPointerEvent<HTMLDivElement>) {
     // Stops the preview stage's own pointerdown (which closes the open
     // sheet on a tap outside it) from treating the start of a legitimate
@@ -684,6 +694,10 @@ export default function Editor({
           offsetY: liveOffset.current.y,
         },
       });
+    // The pan layer covers the whole video, so a tap that never became a drag
+    // is the "I'm done with that tool" tap the stage underneath would have
+    // handled. Only a real drag is exempt.
+    else if (panDrag.current && !panDrag.current.moved) retireTool();
     if (panGuideX.current) panGuideX.current.style.opacity = "0";
     if (panGuideY.current) panGuideY.current.style.opacity = "0";
     liveOffset.current = null;
@@ -880,15 +894,7 @@ export default function Editor({
                 startLongPress(e);
                 return;
               }
-              // A tap on bare stage means "I'm done with that tool". The
-              // sheet closing was only ever half of it: on desktop there is
-              // no sheet, so the panel and its highlighted tab stayed lit
-              // with no way to put them away. Clearing the tab retires the
-              // tool itself, on both.
-              if (sheetOpen) closeSheet();
-              setTab("");
-              setSelectedTextId(null);
-              setLiveTextPos(null);
+              retireTool();
               startLongPress(e);
             }}
             onPointerMove={moveLongPress}
@@ -934,7 +940,12 @@ export default function Editor({
                 }}
               />
             )}
-            {tab === "crop" && !freehand && videoRect && (
+            {/* Not tied to the Crop tab: dragging the video to reposition it
+                is direct manipulation like moving a caption or a blur box,
+                and gating it behind a tab made the video go dead the moment
+                any other tool was picked (or none was). A tap that never
+                becomes a drag still falls through to retiring the tool. */}
+            {!freehand && videoRect && (
               <div
                 className="crop-pan-outer"
                 aria-hidden="true"
