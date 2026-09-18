@@ -46,6 +46,7 @@ import {
   clampCrop,
   MIN_CROP,
   MIN_BLUR,
+  SAFE_ZONE,
   measureOverlay,
   type Crop as CropRect,
 } from "@/lib/canvas";
@@ -1174,7 +1175,7 @@ export default function Editor({
           </div>
         </div>
         <aside
-          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}${tab ? "" : " tool-idle"}`}
+          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}${tab ? "" : " tool-idle"}${freehand ? " freehand-open" : ""}`}
         >
           <div className="tool-tabs">
             {[
@@ -1337,28 +1338,31 @@ export default function Editor({
               </>
             )}
             {tab === "crop" && freehand && (
-              <>
-                <div className="eyebrow">FREE HAND CROP</div>
+              // Stripped to a single line and two buttons on purpose: the
+              // sheet floats over the preview, and at its usual height it sat
+              // across the bottom of the video -- exactly where the bottom
+              // crop edge is, so that edge could not be dragged at all.
+              <div className="freehand-bar">
                 <h2>Drag any edge</h2>
-                <p className="hint">
-                  Touch an edge or corner on the video and drag to crop from
-                  that side.
-                </p>
-                <button className="primary wide" onClick={exitFreehand}>
-                  <Check size={16} /> Done
-                </button>
-                <button
-                  className="subtle wide"
-                  onClick={() =>
-                    change({
-                      ...edit,
-                      crop: { x: 0, y: 0, width: 1, height: 1 },
-                    })
-                  }
-                >
-                  <RotateCcw size={15} /> Reset crop
-                </button>
-              </>
+                <div className="freehand-actions">
+                  <button
+                    className="subtle"
+                    aria-label="Reset crop"
+                    title="Reset crop"
+                    onClick={() =>
+                      change({
+                        ...edit,
+                        crop: { x: 0, y: 0, width: 1, height: 1 },
+                      })
+                    }
+                  >
+                    <RotateCcw size={15} />
+                  </button>
+                  <button className="primary" onClick={exitFreehand}>
+                    <Check size={16} /> Done
+                  </button>
+                </div>
+              </div>
             )}
             {tab === "blur" && (
               <>
@@ -2216,11 +2220,9 @@ function BlurOverlay({
 // tap that never moves past the threshold selects the text (so its card
 // scrolls into view in the panel) instead of "dragging" it by zero.
 const TAP_THRESHOLD = 4;
-// Platforms this gets reposted to (Instagram/TikTok/YouTube Shorts) draw
-// their own chrome over a 9:16 frame and crop in slightly at the edges, so
-// text pushed into these bands gets clipped by them, not by us -- it's kept
-// out of reach rather than merely discouraged.
-const SAFE_ZONE = { top: 0.07, left: 0.07 };
+// SAFE_ZONE is defined in lib/canvas.ts alongside the wrap that respects the
+// same edges. One number on purpose: if the clamp and the width text wraps at
+// disagreed, a line would wrap at a boundary it could then be dragged past.
 // How close to the centre line a drag has to get before it sticks. Kept
 // small on purpose: enough that centring something is effortless, not so
 // much that deliberately placing text just off-centre becomes a fight.
@@ -2303,8 +2305,12 @@ function TextDragHandle({
     // own floors, each offset by half the box so its rendered footprint stays
     // out of the band, not merely its centre point.
     const minY = SAFE_ZONE.top + height / 2,
-      minX = SAFE_ZONE.left + width / 2;
-    const rawX = Math.min(0.9, Math.max(minX, d.startVX + pixelDx / d.boxWidth)),
+      minX = SAFE_ZONE.left + width / 2,
+      maxX = 1 - SAFE_ZONE.right - width / 2;
+    const rawX = Math.min(
+        Math.max(minX, maxX),
+        Math.max(minX, d.startVX + pixelDx / d.boxWidth),
+      ),
       rawY = Math.min(0.9, Math.max(minY, d.startVY + pixelDy / d.boxHeight));
     const x = snapToCentre(rawX),
       y = snapToCentre(rawY);
@@ -2326,6 +2332,7 @@ function TextDragHandle({
             <span>Stays clear of platform UI</span>
           </div>
           <div className="text-safe-zone left" aria-hidden="true" />
+          <div className="text-safe-zone right" aria-hidden="true" />
           <span
             className={`centre-guide v${snapped.x ? " snapped" : ""}`}
             aria-hidden="true"

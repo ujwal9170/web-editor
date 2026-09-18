@@ -74,12 +74,37 @@ export function background(
 // fillText (no maxWidth) sidesteps that inconsistency entirely, since plain
 // text measurement/sizing is consistent everywhere. Shared by text() and
 // measureOverlay() so the drag handle's box never disagrees with the render.
+// The bands the platforms draw their own chrome over. Text is kept out of
+// them both by the drag clamp (Editor.tsx) and by the wrap below, so the two
+// can never disagree about where the usable frame ends.
+export const SAFE_ZONE = { top: 0.07, left: 0.07, right: 0.07 };
+// Breaks a paragraph at the last word that still fits. A word too long to fit
+// on its own is left alone -- fitText shrinks the font for that case, since
+// breaking mid-word would look worse than smaller text.
+function wrapParagraph(ctx: Context2D, text: string, maxWidth: number) {
+  const out: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(" ")) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && ctx.measureText(candidate).width > maxWidth) {
+        out.push(line);
+        line = word;
+      } else line = candidate;
+    }
+    out.push(line);
+  }
+  return out;
+}
 function fitText(ctx: Context2D, t: Overlay, width: number) {
   const scale = width / 1080;
-  const maxWidth = width * 0.94;
-  const lines = t.text.split("\n");
+  const maxWidth = width * (1 - SAFE_ZONE.left - SAFE_ZONE.right);
   let fontSize = t.size * scale;
   ctx.font = `700 ${fontSize}px "${t.font}"`;
+  // Long text now runs onto another line at the safe edge instead of the
+  // whole block shrinking to fit on one -- typing a longer caption should
+  // cost a line, not the size of every word already there.
+  let lines = wrapParagraph(ctx, t.text, maxWidth);
   const widest = Math.max(
     1,
     ...lines.map((line) => ctx.measureText(line).width),
@@ -87,6 +112,7 @@ function fitText(ctx: Context2D, t: Overlay, width: number) {
   if (widest > maxWidth) {
     fontSize *= maxWidth / widest;
     ctx.font = `700 ${fontSize}px "${t.font}"`;
+    lines = wrapParagraph(ctx, t.text, maxWidth);
   }
   return { lines, fontSize };
 }
