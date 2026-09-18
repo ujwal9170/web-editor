@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, fileUrl } from "./api";
 import { createExportQueue } from "./exportQueue.mjs";
+import { rememberExport } from "./exportBlobs";
 import type { Project } from "./types";
 
 // Some devices can't run an H.264 encoder at 1080p at all (weaker/older
@@ -104,7 +105,12 @@ export function useDeviceExports() {
             const state = await api(`/jobs/${job.id}`, {
               signal: control.signal,
             });
-            if (state.status === "ready") return state.resultId;
+            if (state.status === "ready") {
+              // Hold on to what was just rendered so sharing it doesn't have
+              // to fetch the same bytes back down again.
+              rememberExport(state.resultId, result.blob);
+              return state.resultId;
+            }
             if (state.status === "failed") throw new Error(state.error);
             if (Date.now() > deadline)
               throw new Error(

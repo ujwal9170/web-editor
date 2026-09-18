@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, LoaderCircle, Share2, X } from "lucide-react";
 import { fileUrl } from "@/lib/api";
+import { rememberedExport } from "@/lib/exportBlobs";
 import type { Export } from "@/lib/types";
 import { videoFileName, shareVideoFile } from "@/shared/file-share.mjs";
 
@@ -42,15 +43,22 @@ export default function ShareExport({
           );
           return;
         }
-        const response = await fetch(fileUrl("export", item.id, "file"), {
-          credentials: "same-origin",
-          signal: controller.signal,
-        });
-        if (!response.ok)
-          throw new Error(
-            "Unable to load this export. It may have expired; refresh and try again.",
-          );
-        const blob = await response.blob();
+        // This device may still be holding the file it rendered, in which
+        // case there is nothing to prepare -- downloading it back from the
+        // server is how "Preparing MP4" used to sit there for minutes on a
+        // phone, re-fetching bytes it had just finished uploading.
+        let blob = rememberedExport(item.id);
+        if (!blob) {
+          const response = await fetch(fileUrl("export", item.id, "file"), {
+            credentials: "same-origin",
+            signal: controller.signal,
+          });
+          if (!response.ok)
+            throw new Error(
+              "Unable to load this export. It may have expired; refresh and try again.",
+            );
+          blob = await response.blob();
+        }
         if (controller.signal.aborted) return;
         if (!blob.size || !blob.type.toLowerCase().startsWith("video/mp4"))
           throw new Error(
