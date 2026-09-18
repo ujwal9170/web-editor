@@ -4,6 +4,7 @@ import {
   ALL_FORMATS,
   CanvasSink,
   CanvasSource,
+  VideoSampleSink,
   AudioSampleSink,
   AudioSample,
   AudioSampleSource,
@@ -58,16 +59,34 @@ self.onmessage = async ({
     const { width, height, bitrate, fps } = exportProfile(data.resolution);
     const { ranges, duration } = exportTimeline(data.edit.segments);
     if (duration < 3) throw new Error("Keep at least 3 seconds for export.");
-    const options = { width, height, bitrate, latencyMode: "quality" as const };
-    let hardwareAcceleration: "prefer-hardware" | "no-preference" =
-      "prefer-hardware";
-    if (!(await canEncodeVideo("avc", { ...options, hardwareAcceleration }))) {
-      hardwareAcceleration = "no-preference";
-      if (!(await canEncodeVideo("avc", { ...options, hardwareAcceleration })))
-        throw new Error(
-          "H.264 export is unavailable at this resolution. Try 720p or a shorter edit.",
-        );
+    // "quality" latency mode (best compression, since this isn't a live
+    // call) is what a hardware encoder on a quirky/budget device is most
+    // likely to reject -- canEncodeVideo only varied hardwareAcceleration
+    // before, so a device whose encoder simply doesn't support "quality"
+    // mode failed here at every resolution, with a message that (wrongly)
+    // pointed at resolution as the fix. Try every combination before
+    // actually giving up.
+    const baseOptions = { width, height, bitrate };
+    const modeCandidates = (
+      ["prefer-hardware", "no-preference"] as const
+    ).flatMap((hardwareAcceleration) =>
+      (["quality", "realtime"] as const).map((latencyMode) => ({
+        hardwareAcceleration,
+        latencyMode,
+      })),
+    );
+    let chosenMode: (typeof modeCandidates)[number] | undefined;
+    for (const candidate of modeCandidates) {
+      if (await canEncodeVideo("avc", { ...baseOptions, ...candidate })) {
+        chosenMode = candidate;
+        break;
+      }
     }
+    if (!chosenMode)
+      throw new Error(
+        "H.264 export is unavailable at this resolution. Try 720p, an updated Chrome, or a shorter edit.",
+      );
+    const { hardwareAcceleration, latencyMode } = chosenMode;
     const source = input(data.source);
     const videoTrack = await source.getPrimaryVideoTrack();
     if (!videoTrack || !(await videoTrack.canDecode()))
@@ -102,14 +121,32 @@ self.onmessage = async ({
         "AAC audio export is unavailable in this browser. Try an updated Safari/iOS or another supported browser; audio will not be silently removed.",
       );
 
+    // The track's own displayWidth/displayHeight come from container
+    // metadata; on some mobile hardware decoders (Android in particular) the
+    // frames actually produced can disagree with that metadata for rotated
+    // footage, which is enough to throw off the geometry below and stretch
+    // the whole export on that device even though desktop -- reading the
+    // metadata correctly -- comes out fine. Decoding one real sample and
+    // trusting *its* reported dimensions instead removes that gap.
+    let sourceWidth = videoTrack.displayWidth,
+      sourceHeight = videoTrack.displayHeight,
+      rotation = videoTrack.rotation;
+    const probeSample = await new VideoSampleSink(videoTrack).getSample(0);
+    if (probeSample) {
+      sourceWidth = probeSample.displayWidth;
+      sourceHeight = probeSample.displayHeight;
+      rotation = probeSample.rotation;
+      probeSample.close();
+    }
     const geometry = cropGeometry(
       data.edit.crop,
-      videoTrack.displayWidth,
-      videoTrack.displayHeight,
+      sourceWidth,
+      sourceHeight,
       width,
       height,
     );
     const sink = new CanvasSink(videoTrack, {
+      rotation,
       crop: {
         left: geometry.left,
         top: geometry.top,
@@ -140,7 +177,7 @@ self.onmessage = async ({
       codec: "avc",
       bitrate,
       hardwareAcceleration,
-      latencyMode: "quality",
+      latencyMode,
       keyFrameInterval: 2,
       onEncodedPacket: countBytes,
     });
