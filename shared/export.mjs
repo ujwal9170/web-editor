@@ -2,17 +2,31 @@
 export function exportProfile(resolution = 720) {
   if (![720, 1080].includes(resolution))
     throw new Error("Choose 720p or 1080p.");
+  const small = resolution === 720;
   return {
     width: resolution,
-    height: resolution === 720 ? 1280 : 1920,
+    height: small ? 1280 : 1920,
+    // A ceiling, not a target: the export picks its own frame rate from the
+    // source and never exceeds this (see device-render.worker.ts).
     fps: 30,
-    // Not the target any more -- the export encodes to a constant quantizer
-    // (see device-render.worker.ts), so this is the ceiling and the fallback
-    // for encoders that can't do quantizer-driven encoding. 720p used to sit
-    // at 4 Mbps, which starved a busy shot at 720x1280 and is why 720p looked
-    // markedly worse than the same clip out of other editors; it now has room
-    // to spend what a hard frame needs, while an easy one still costs little.
-    bitrate: resolution === 720 ? 6_000_000 : 10_000_000,
+    // The ceiling, and the target on any encoder that can't do quantizer-
+    // driven encoding -- which includes plenty of phones. Measured here: the
+    // same edit came out at 2.8 Mbps from a desktop (quantizer) and 9.6 Mbps
+    // from an Android phone, pinned to whatever this number said, so on those
+    // devices this value alone decides the file size. It was briefly 10/6,
+    // which made a 53s clip a 60MB file and is why 1080p dwarfed 720p.
+    // 6.5/5 is ample for 9:16 at these sizes and still leaves 720p better off
+    // than the 4 Mbps that was starving it.
+    bitrate: small ? 5_000_000 : 6_500_000,
+    // Lower means better. The two resolutions get different values on
+    // purpose: 1080p carries 2.25x the pixels of 720p, so at one shared
+    // quantizer its file is about 2.25x the size -- that gap is simply what
+    // the extra pixels cost. Spending a little quality at 1080p and buying
+    // some back at 720p narrows it from both ends. 720p at 19 is visually
+    // tighter than before while still far smaller than 1080p; 1080p at 23
+    // (x264's own default) stays clean on a phone screen and through the
+    // re-encode every platform puts it through.
+    quantizer: small ? 19 : 23,
   };
 }
 

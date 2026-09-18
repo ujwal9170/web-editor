@@ -57,7 +57,13 @@ self.onmessage = async ({
   }
   try {
     progress("Checking device support…", 0, 0, true);
-    const { width, height, bitrate, fps } = exportProfile(data.resolution);
+    const {
+      width,
+      height,
+      bitrate,
+      quantizer,
+      fps: maxFps,
+    } = exportProfile(data.resolution);
     const { ranges, duration } = exportTimeline(data.edit.segments);
     if (duration < 3) throw new Error("Keep at least 3 seconds for export.");
     // "quality" latency mode (best compression, since this isn't a live
@@ -122,6 +128,16 @@ self.onmessage = async ({
         "AAC audio export is unavailable in this browser. Try an updated Safari/iOS or another supported browser; audio will not be silently removed.",
       );
 
+    // Encoding a 24 or 25fps clip at 30 spends a fifth of every second on
+    // frames that are copies of the one before -- bytes that buy nothing,
+    // since the motion isn't there to begin with. Matching the source (never
+    // exceeding the profile) is the one size saving that costs no quality at
+    // all. A source already at or above the ceiling is unaffected.
+    const stats = await videoTrack
+      .computePacketStats(120)
+      .catch(() => ({ averagePacketRate: 0 }));
+    const sourceFps = Math.round(stats.averagePacketRate || 0);
+    const fps = sourceFps > 0 ? Math.min(maxFps, sourceFps) : maxFps;
     const sourceWidth = await videoTrack.getDisplayWidth();
     const sourceHeight = await videoTrack.getDisplayHeight();
     const scale = Math.min(1, width / sourceWidth, height / sourceHeight);
@@ -163,7 +179,7 @@ self.onmessage = async ({
       // throws when no fallback is given). `quality` supersedes the
       // deprecated `bitrate` field.
       quality: new Quality({
-        quantizer: 21,
+        quantizer,
         bitrate,
         bitrateMode: "variable",
       }),
