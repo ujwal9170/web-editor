@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from "react";
 import {
   Film,
   Download,
+  Share2,
   FolderOpen,
   Scissors,
   Sparkles,
@@ -29,6 +30,7 @@ import Editor from "@/components/Editor";
 import DeviceExportQueue from "@/components/DeviceExportQueue";
 import { useDeviceExports } from "@/lib/useDeviceExports";
 import CaptionPreview from "@/components/CaptionPreview";
+import ShareExport from "@/components/ShareExport";
 import ProjectCard from "@/components/ProjectCard";
 import MediaCard from "@/components/MediaCard";
 import { useWebMCP } from "@/lib/useWebMCP";
@@ -73,6 +75,7 @@ export default function Studio() {
     [password, setPassword] = useState(""),
     [caption, setCaption] = useState<Media | null>(null),
     [captionPreview, setCaptionPreview] = useState<Export | null>(null),
+    [shareExport, setShareExport] = useState<Export | null>(null),
     [watch, setWatch] = useState<Export | null>(null),
     [mediaTab, setMediaTab] = useState<"all" | "queue" | "removed">("all"),
     [menuOpen, setMenuOpen] = useState<string | null>(null),
@@ -742,151 +745,161 @@ export default function Studio() {
                 )}
               </div>
             ) : (
-            <div className="media-grid">
-              {view === "media" &&
-                mediaTab === "all" &&
-                sourceMedia
-                  .filter((m) =>
-                    m.name.toLowerCase().includes(query.toLowerCase()),
-                  )
-                  .map((m) => (
-                    <MediaCard
-                      key={m.id}
-                      media={m}
-                      busy={busy}
-                      onOpen={() => editMedia(m)}
-                      onCaption={() => setCaption(m)}
-                      onDelete={() => deleteMedia(m)}
-                      queueMenu={{
-                        open: menuOpen === m.id,
-                        queued: queue.some(
-                          (q) =>
-                            q.media.id === m.id &&
-                            (q.status === "queued" ||
-                              q.status === "processing"),
-                        ),
-                        onToggle: () =>
-                          setMenuOpen(menuOpen === m.id ? null : m.id),
-                        onAdd: () => addToQueue(m),
-                      }}
-                    />
-                  ))}
-              {view === "media" &&
-                mediaTab === "removed" &&
-                isolatedMedia
-                  .filter((m) =>
-                    m.name.toLowerCase().includes(query.toLowerCase()),
-                  )
-                  .map((m) => (
-                    <MediaCard
-                      key={m.id}
-                      media={m}
-                      busy={busy}
-                      onOpen={() => editMedia(m)}
-                      onCaption={() => setCaption(m)}
-                      onDelete={() => deleteMedia(m)}
-                    />
-                  ))}
-              {view === "media" && mediaTab === "all" && (
-                <button
-                  className="upload-card"
-                  onClick={() => input.current?.click()}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    upload(e.dataTransfer.files[0]);
-                  }}
-                >
-                  <span>
-                    <Plus size={25} />
-                  </span>
-                  <strong>Add your next clip</strong>
-                  <p>Drop a video here or browse files</p>
-                  <small>Up to 300 MB · 15 minutes</small>
-                </button>
-              )}
-              {view === "editor" &&
-                projects
-                  .filter((p) =>
-                    p.name.toLowerCase().includes(query.toLowerCase()),
-                  )
-                  .map((p) => (
-                    <ProjectCard
-                      key={p.id}
-                      project={p}
-                      media={media.find((m) => m.id === p.mediaId)}
-                      busy={busy}
-                      onOpen={() => openProject(p.id)}
-                      onDelete={() => deleteProject(p)}
-                    />
-                  ))}
-              {view === "exports" &&
-                exports
-                  .filter((x) =>
-                    x.name.toLowerCase().includes(query.toLowerCase()),
-                  )
-                  .map((x) => (
-                    <article className="media-card" key={x.id}>
-                      <button className="thumbnail" onClick={() => setWatch(x)}>
-                        <img
-                          src={fileUrl("export", x.id, "thumbnail")}
-                          alt={x.name}
-                        />
-                        <span className="source-tag finished">
-                          <Check size={12} /> Exported
-                        </span>
-                        <span className="duration">{clock(x.duration)}</span>
-                      </button>
-                      <div className="card-body">
-                        <h3>{x.name}</h3>
-                        <p className="caption-preview">
-                          {x.caption || "No caption added"}
-                        </p>
-                        <div className="card-footer">
-                          <span>
-                            {size(x.size)}
-                            {x.expiresAt
-                              ? ` · ${Math.max(0, Math.ceil((x.expiresAt - Date.now()) / 86400_000))} days left`
-                              : ""}
+              <div className="media-grid">
+                {view === "media" &&
+                  mediaTab === "all" &&
+                  sourceMedia
+                    .filter((m) =>
+                      m.name.toLowerCase().includes(query.toLowerCase()),
+                    )
+                    .map((m) => (
+                      <MediaCard
+                        key={m.id}
+                        media={m}
+                        busy={busy}
+                        onOpen={() => editMedia(m)}
+                        onCaption={() => setCaption(m)}
+                        onDelete={() => deleteMedia(m)}
+                        queueMenu={{
+                          open: menuOpen === m.id,
+                          queued: queue.some(
+                            (q) =>
+                              q.media.id === m.id &&
+                              (q.status === "queued" ||
+                                q.status === "processing"),
+                          ),
+                          onToggle: () =>
+                            setMenuOpen(menuOpen === m.id ? null : m.id),
+                          onAdd: () => addToQueue(m),
+                        }}
+                      />
+                    ))}
+                {view === "media" &&
+                  mediaTab === "removed" &&
+                  isolatedMedia
+                    .filter((m) =>
+                      m.name.toLowerCase().includes(query.toLowerCase()),
+                    )
+                    .map((m) => (
+                      <MediaCard
+                        key={m.id}
+                        media={m}
+                        busy={busy}
+                        onOpen={() => editMedia(m)}
+                        onCaption={() => setCaption(m)}
+                        onDelete={() => deleteMedia(m)}
+                      />
+                    ))}
+                {view === "media" && mediaTab === "all" && (
+                  <button
+                    className="upload-card"
+                    onClick={() => input.current?.click()}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      upload(e.dataTransfer.files[0]);
+                    }}
+                  >
+                    <span>
+                      <Plus size={25} />
+                    </span>
+                    <strong>Add your next clip</strong>
+                    <p>Drop a video here or browse files</p>
+                    <small>Up to 300 MB · 15 minutes</small>
+                  </button>
+                )}
+                {view === "editor" &&
+                  projects
+                    .filter((p) =>
+                      p.name.toLowerCase().includes(query.toLowerCase()),
+                    )
+                    .map((p) => (
+                      <ProjectCard
+                        key={p.id}
+                        project={p}
+                        media={media.find((m) => m.id === p.mediaId)}
+                        busy={busy}
+                        onOpen={() => openProject(p.id)}
+                        onDelete={() => deleteProject(p)}
+                      />
+                    ))}
+                {view === "exports" &&
+                  exports
+                    .filter((x) =>
+                      x.name.toLowerCase().includes(query.toLowerCase()),
+                    )
+                    .map((x) => (
+                      <article className="media-card" key={x.id}>
+                        <button
+                          className="thumbnail"
+                          onClick={() => setWatch(x)}
+                        >
+                          <img
+                            src={fileUrl("export", x.id, "thumbnail")}
+                            alt={x.name}
+                          />
+                          <span className="source-tag finished">
+                            <Check size={12} /> Exported
                           </span>
-                          <div>
-                            <button
-                              title="Preview caption"
-                              aria-label={`Preview caption for ${x.name}`}
-                              onClick={() => setCaptionPreview(x)}
-                            >
-                              <Captions size={18} />
-                            </button>
-                            <a
-                              title="Download MP4"
-                              href={fileUrl("export", x.id, "file", true)}
-                            >
-                              <Download size={18} />
-                            </a>
-                            <button
-                              aria-label="Delete export"
-                              onClick={() => {
-                                if (
-                                  confirm(
-                                    "Delete this export? Your source and project will stay.",
+                          <span className="duration">{clock(x.duration)}</span>
+                        </button>
+                        <div className="card-body">
+                          <h3>{x.name}</h3>
+                          <p className="caption-preview">
+                            {x.caption || "No caption added"}
+                          </p>
+                          <div className="card-footer">
+                            <span>
+                              {size(x.size)}
+                              {x.expiresAt
+                                ? ` · ${Math.max(0, Math.ceil((x.expiresAt - Date.now()) / 86400_000))} days left`
+                                : ""}
+                            </span>
+                            <div>
+                              <button
+                                title="Preview caption"
+                                aria-label={`Preview caption for ${x.name}`}
+                                onClick={() => setCaptionPreview(x)}
+                              >
+                                <Captions size={18} />
+                              </button>
+                              <a
+                                title="Download MP4"
+                                href={fileUrl("export", x.id, "file", true)}
+                              >
+                                <Download size={18} />
+                              </a>
+                              <button
+                                title="Share MP4 file"
+                                aria-label={`Share video file for ${x.name}`}
+                                onClick={() => setShareExport(x)}
+                              >
+                                <Share2 size={18} />
+                              </button>
+                              <button
+                                aria-label="Delete export"
+                                onClick={() => {
+                                  if (
+                                    confirm(
+                                      "Delete this export? Your source and project will stay.",
+                                    )
                                   )
-                                )
-                                  attempt(async () => {
-                                    await api(`/exports/${x.id}`, {
-                                      method: "DELETE",
+                                    attempt(async () => {
+                                      await api(`/exports/${x.id}`, {
+                                        method: "DELETE",
+                                      });
+                                      await refresh();
                                     });
-                                    await refresh();
-                                  });
-                              }}
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                                }}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </article>
-                  ))}
-            </div>
+                      </article>
+                    ))}
+              </div>
             )}
             {view !== "media" &&
               !(view === "exports" ? exports : projects).length && (
@@ -907,16 +920,21 @@ export default function Studio() {
                   </button>
                 </div>
               )}
-            {view === "media" && mediaTab === "removed" && !isolatedMedia.length && (
-              <div className="empty">
-                <Music2 size={36} />
-                <h2>No instrument-removed clips yet.</h2>
-                <p>Run the Instrument Remover queue to see results here.</p>
-                <button className="subtle" onClick={() => setMediaTab("queue")}>
-                  Go to Instrument Remover <ArrowUpRight size={16} />
-                </button>
-              </div>
-            )}
+            {view === "media" &&
+              mediaTab === "removed" &&
+              !isolatedMedia.length && (
+                <div className="empty">
+                  <Music2 size={36} />
+                  <h2>No instrument-removed clips yet.</h2>
+                  <p>Run the Instrument Remover queue to see results here.</p>
+                  <button
+                    className="subtle"
+                    onClick={() => setMediaTab("queue")}
+                  >
+                    Go to Instrument Remover <ArrowUpRight size={16} />
+                  </button>
+                </div>
+              )}
             {jobs.some((j) => j.status === "failed") && (
               <details className="job-errors">
                 <summary>Recent processing issues</summary>
@@ -1105,8 +1123,22 @@ export default function Studio() {
           </section>
         </div>
       )}
-      <DeviceExportQueue rows={deviceExports.rows} cancel={deviceExports.cancel} dismiss={deviceExports.dismiss}
-        openExports={() => { setView("exports"); void refresh(); }} />
+      <DeviceExportQueue
+        rows={deviceExports.rows}
+        cancel={deviceExports.cancel}
+        dismiss={deviceExports.dismiss}
+        openExports={() => {
+          setView("exports");
+          void refresh();
+        }}
+      />
+      {shareExport && (
+        <ShareExport
+          key={shareExport.id}
+          item={shareExport}
+          onClose={() => setShareExport(null)}
+        />
+      )}
       {captionPreview && (
         <CaptionPreview
           key={captionPreview.id}

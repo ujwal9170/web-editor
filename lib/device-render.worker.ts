@@ -102,23 +102,15 @@ self.onmessage = async ({
         "AAC audio export is unavailable in this browser. Try an updated Safari/iOS or another supported browser; audio will not be silently removed.",
       );
 
-    const geometry = cropGeometry(
-      data.edit.crop,
-      videoTrack.displayWidth,
-      videoTrack.displayHeight,
-      width,
-      height,
-    );
+    const sourceWidth = await videoTrack.getDisplayWidth();
+    const sourceHeight = await videoTrack.getDisplayHeight();
+    const scale = Math.min(1, width / sourceWidth, height / sourceHeight);
+    // Decode a complete, aspect-preserving frame first. Do not crop/resize a
+    // native VideoFrame into the cropped box: mobile decoder/canvas paths can
+    // disagree about its source rectangle. Crop the normalized canvas below.
     const sink = new CanvasSink(videoTrack, {
-      crop: {
-        left: geometry.left,
-        top: geometry.top,
-        width: geometry.width,
-        height: geometry.height,
-      },
-      width: geometry.drawWidth,
-      height: geometry.drawHeight,
-      fit: "fill",
+      width: Math.max(2, Math.round(sourceWidth * scale)),
+      fit: "contain",
       poolSize: 2,
     });
     const canvas = new OffscreenCanvas(width, height);
@@ -169,7 +161,24 @@ self.onmessage = async ({
             "A source frame could not be decoded. Try an updated browser or a supported source.",
           );
         ctx.drawImage(data.artwork.background, 0, 0);
-        ctx.drawImage(frame.canvas, geometry.drawX, geometry.drawY);
+        const geometry = cropGeometry(
+          data.edit.crop,
+          frame.canvas.width,
+          frame.canvas.height,
+          width,
+          height,
+        );
+        ctx.drawImage(
+          frame.canvas,
+          geometry.left,
+          geometry.top,
+          geometry.width,
+          geometry.height,
+          geometry.drawX,
+          geometry.drawY,
+          geometry.drawWidth,
+          geometry.drawHeight,
+        );
         for (const overlay of data.artwork.overlays) {
           if (
             time.sourceTime * 1000 >= overlay.startMs &&
