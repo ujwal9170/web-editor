@@ -36,6 +36,27 @@ export const fileUrl = (
   type = "file",
   download = false,
 ) => `/api/files/${kind}/${id}/${type}${download ? "?download=1" : ""}`;
+// "how long ago", in the coarsest unit that still says something useful: a
+// fresh export reads "just now" rather than "0 minutes ago", and anything
+// past a week is a date, since "23 days ago" is harder to place than the day
+// it happened.
+export function ago(at = 0) {
+  const seconds = Math.max(0, (Date.now() - at) / 1000);
+  if (seconds < 45) return "just now";
+  const minutes = seconds / 60;
+  if (minutes < 60)
+    return `${Math.round(minutes)} min${Math.round(minutes) === 1 ? "" : "s"} ago`;
+  const hours = minutes / 60;
+  if (hours < 24)
+    return `${Math.round(hours)} hour${Math.round(hours) === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days} days ago`;
+  return new Date(at).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+}
 export const clock = (seconds = 0) =>
   `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
     .toString()

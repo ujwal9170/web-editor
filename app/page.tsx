@@ -25,7 +25,15 @@ import {
   UserPlus,
   Share2,
 } from "lucide-react";
-import { api, fileUrl, clock, size, awaitJob, LAST_TEMPLATE_KEY } from "@/lib/api";
+import {
+  api,
+  fileUrl,
+  clock,
+  size,
+  ago,
+  awaitJob,
+  LAST_TEMPLATE_KEY,
+} from "@/lib/api";
 import type { Media, Project, Export, Job, Template } from "@/lib/types";
 import DeviceExportQueue from "@/components/DeviceExportQueue";
 import { useDeviceExports } from "@/lib/useDeviceExports";
@@ -1124,7 +1132,7 @@ export default function Studio() {
                         </p>
                         <div className="card-footer">
                           <span>
-                            {size(x.size)}
+                            {ago(x.createdAt)} · {size(x.size)}
                             {x.expiresAt
                               ? ` · ${Math.max(0, Math.ceil((x.expiresAt - Date.now()) / 86400_000))} days left`
                               : ""}
