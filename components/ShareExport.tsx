@@ -96,31 +96,46 @@ export default function ShareExport({
     };
   }, [item.id, item.name, item.size]);
 
-  async function share() {
+  function share() {
     if (!file || sharing) return;
-    setSharing(true);
+    // navigator.share() has to be the very first thing this tap does.
+    // Android Chrome rejects it with NotAllowedError ("Permission denied")
+    // if anything at all runs before it -- a setState and the re-render it
+    // schedules was enough to lose the tap's transient activation. So the
+    // call goes out synchronously and the UI catches up afterwards, rather
+    // than the other way round.
+    // Deliberately omits url/text: receiving apps should get only the MP4.
+    let pending: Promise<void>;
     try {
-      // A fresh click after fetching preserves Safari's transient activation.
-      // Deliberately omit url/text: receiving apps should receive only the MP4.
-      await shareVideoFile(navigator, file);
-      setStatus(
-        "Video handed to the share menu. Complete sending in your chosen app.",
-      );
+      pending = shareVideoFile(navigator, file);
     } catch (error) {
-      // Anything but a cancel names what actually went wrong. "Sharing could
-      // not open" on its own gave no way to tell a browser that refuses the
-      // file from one that lost the tap's user activation from one that ran
-      // out of memory -- three different problems with three different fixes.
-      const name = error instanceof Error ? error.name : "";
-      const detail = error instanceof Error ? error.message : String(error);
-      setStatus(
-        name === "AbortError"
-          ? "Sharing cancelled. You can try again."
-          : `Sharing could not open — ${name || "error"}: ${detail.slice(0, 160)}. Try again, or download the MP4 and attach it in Telegram.`,
-      );
-    } finally {
-      setSharing(false);
+      report(error);
+      return;
     }
+    setSharing(true);
+    pending
+      .then(() =>
+        setStatus(
+          "Video handed to the share menu. Complete sending in your chosen app.",
+        ),
+      )
+      .catch(report)
+      .finally(() => setSharing(false));
+  }
+  function report(error: unknown) {
+    // Anything but a cancel names what actually went wrong. "Sharing could
+    // not open" on its own gave no way to tell a browser that refuses the
+    // file from one that lost the tap's user activation from one that ran
+    // out of memory -- three different problems with three different fixes.
+    const name = error instanceof Error ? error.name : "";
+    const detail = error instanceof Error ? error.message : String(error);
+    setStatus(
+      name === "AbortError"
+        ? "Sharing cancelled. You can try again."
+        : name === "NotAllowedError"
+          ? "Android blocked the share because the tap wasn't registered in time. Tap Share MP4 once more — or use Download MP4 and attach it."
+          : `Sharing could not open — ${name || "error"}: ${detail.slice(0, 160)}. Try again, or download the MP4 and attach it in Telegram.`,
+    );
   }
 
   return (

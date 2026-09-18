@@ -2216,11 +2216,11 @@ function BlurOverlay({
 // tap that never moves past the threshold selects the text (so its card
 // scrolls into view in the panel) instead of "dragging" it by zero.
 const TAP_THRESHOLD = 4;
-// Platforms this gets reposted to (Instagram/TikTok/YouTube Shorts) all
-// overlay their own username/follow chrome across the top of a 9:16 frame --
-// text dragged up there gets visually clipped by that chrome, not by us, so
-// it's kept out of reach entirely rather than just discouraged.
-const TOP_SAFE_ZONE = 0.1;
+// Platforms this gets reposted to (Instagram/TikTok/YouTube Shorts) draw
+// their own chrome over a 9:16 frame and crop in slightly at the edges, so
+// text pushed into these bands gets clipped by them, not by us -- it's kept
+// out of reach rather than merely discouraged.
+const SAFE_ZONE = { top: 0.07, left: 0.07 };
 // How close to the centre line a drag has to get before it sticks. Kept
 // small on purpose: enough that centring something is effortless, not so
 // much that deliberately placing text just off-centre becomes a fight.
@@ -2299,11 +2299,12 @@ function TextDragHandle({
     d.moved = true;
     // Capped at 0.9 rather than 1 -- dragging text flush to the video's
     // right/bottom edge crops it against safe-zone overlays (captions, UI
-    // chrome) on most platforms it gets reposted to. The top edge has its
-    // own floor: the box's own half-height keeps its rendered footprint (not
-    // just its center point) out of TOP_SAFE_ZONE entirely.
-    const minY = TOP_SAFE_ZONE + height / 2;
-    const rawX = Math.min(0.9, Math.max(0, d.startVX + pixelDx / d.boxWidth)),
+    // chrome) on most platforms it gets reposted to. Top and left get their
+    // own floors, each offset by half the box so its rendered footprint stays
+    // out of the band, not merely its centre point.
+    const minY = SAFE_ZONE.top + height / 2,
+      minX = SAFE_ZONE.left + width / 2;
+    const rawX = Math.min(0.9, Math.max(minX, d.startVX + pixelDx / d.boxWidth)),
       rawY = Math.min(0.9, Math.max(minY, d.startVY + pixelDy / d.boxHeight));
     const x = snapToCentre(rawX),
       y = snapToCentre(rawY);
@@ -2321,9 +2322,10 @@ function TextDragHandle({
     <>
       {dragging && (
         <>
-          <div className="text-safe-zone" aria-hidden="true">
+          <div className="text-safe-zone top" aria-hidden="true">
             <span>Stays clear of platform UI</span>
           </div>
+          <div className="text-safe-zone left" aria-hidden="true" />
           <span
             className={`centre-guide v${snapped.x ? " snapped" : ""}`}
             aria-hidden="true"

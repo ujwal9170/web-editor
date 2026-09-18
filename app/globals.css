@@ -1505,8 +1505,6 @@ header {
    permanent fixture cluttering the preview the rest of the time. */
 .text-safe-zone {
   position: absolute;
-  inset: 0 0 auto 0;
-  height: 10%;
   background: repeating-linear-gradient(
     45deg,
     #facc1533,
@@ -1514,12 +1512,23 @@ header {
     #facc1555 8px,
     #facc1555 16px
   );
-  border-bottom: 1.5px dashed #facc15;
   pointer-events: none;
   display: flex;
   align-items: flex-end;
   justify-content: center;
   padding-bottom: 4px;
+}
+/* Percentages here must match SAFE_ZONE in Editor.tsx -- the band is the
+   drawn half of the same rule the drag clamp enforces. */
+.text-safe-zone.top {
+  inset: 0 0 auto 0;
+  height: 7%;
+  border-bottom: 1.5px dashed #facc15;
+}
+.text-safe-zone.left {
+  inset: 0 auto 0 0;
+  width: 7%;
+  border-right: 1.5px dashed #facc15;
 }
 .text-safe-zone span {
   font-size: 10px;
