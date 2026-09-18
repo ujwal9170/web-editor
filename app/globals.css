@@ -2489,6 +2489,38 @@ header {
   }
 }
 
+/* The export is fetched and handed to the OS share sheet as a real MP4 file,
+   so this dialog carries the preparing/ready/failed status the handover needs
+   to report, plus a download fallback for browsers without file sharing. */
+.share-export-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  height: fit-content;
+  color: var(--text);
+  width: min(480px, calc(100vw - 24px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.share-export-dialog::backdrop {
+  background: #000a;
+  backdrop-filter: blur(6px);
+}
+.share-export-dialog h2 {
+  padding-right: 36px;
+}
+.share-export-dialog p {
+  margin: 16px 0;
+}
+.share-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.share-export-actions > * {
+  min-height: 44px;
+}
 /* A phone held sideways has very little height to spend, so trim the chrome
    around the preview rather than letting it push the timeline off-screen. */
 @media (max-width: 900px) and (max-height: 520px) {

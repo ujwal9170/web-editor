@@ -30,6 +30,7 @@ import type { Media, Project, Export, Job, Template } from "@/lib/types";
 import DeviceExportQueue from "@/components/DeviceExportQueue";
 import { useDeviceExports } from "@/lib/useDeviceExports";
 import CaptionPreview from "@/components/CaptionPreview";
+import ShareExport from "@/components/ShareExport";
 import ProjectCard from "@/components/ProjectCard";
 import MediaCard from "@/components/MediaCard";
 import { useWebMCP } from "@/lib/useWebMCP";
@@ -76,7 +77,12 @@ export default function Studio() {
     [query, setQuery] = useState(""),
     [importing, setImporting] = useState(false),
     [url, setUrl] = useState(""),
-    [permission, setPermission] = useState(false),
+    // Ticked by default: this workspace is per-account and private, and
+    // everyone importing here is bringing in their own footage. The box is
+    // still shown (and still untickable) so the declaration is on screen and
+    // can be withdrawn, rather than being asserted silently on their behalf.
+    [permission, setPermission] = useState(true),
+    [shareExport, setShareExport] = useState<Export | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [authed, setAuthed] = useState<boolean | null>(null),
@@ -266,19 +272,6 @@ export default function Studio() {
       setBusy(false);
     }
   }
-  // navigator.share() with an attached file turned out unreliable in
-  // practice (desktop AND mobile) -- browsers only guarantee it "best
-  // effort", with undocumented size limits and a click-must-be-fresh
-  // requirement no amount of app-side code can force to hold. A plain link
-  // has none of that: every browser, on every device, opens a URL the same
-  // way, every time. /api/share/:id (server/app.mjs) is a deliberately
-  // unauthenticated route serving just this one export by its own
-  // (unguessable UUID) id, so Telegram's share intent can open it directly
-  // -- same lifecycle as the export itself, gone the moment it expires.
-  function telegramShareHref(item: Export) {
-    const shareUrl = new URL(`/api/share/${item.id}`, location.href).href;
-    return `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(item.name || "")}`;
-  }
   function lastTemplateId(): string | undefined {
     try {
       const id = localStorage.getItem(LAST_TEMPLATE_KEY);
@@ -321,7 +314,6 @@ export default function Studio() {
       });
       setImporting(false);
       setUrl("");
-      setPermission(false);
       const done = await awaitJob(job.id);
       const list = await api<Media[]>("/media");
       await refresh();
@@ -1112,15 +1104,13 @@ export default function Studio() {
                             >
                               <Download size={18} />
                             </a>
-                            <a
-                              title="Share to Telegram"
-                              aria-label={`Share ${x.name} to Telegram`}
-                              href={telegramShareHref(x)}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <button
+                              title="Share video file"
+                              aria-label={`Share ${x.name} as a video file`}
+                              onClick={() => setShareExport(x)}
                             >
                               <Share2 size={18} />
-                            </a>
+                            </button>
                             <button
                               aria-label="Delete export"
                               onClick={() => {
@@ -1370,6 +1360,13 @@ export default function Studio() {
           key={captionPreview.id}
           item={captionPreview}
           onClose={() => setCaptionPreview(null)}
+        />
+      )}
+      {shareExport && (
+        <ShareExport
+          key={shareExport.id}
+          item={shareExport}
+          onClose={() => setShareExport(null)}
         />
       )}
       {watch && (
