@@ -4,7 +4,6 @@ import {
   ALL_FORMATS,
   CanvasSink,
   CanvasSource,
-  VideoSampleSink,
   AudioSampleSink,
   AudioSample,
   AudioSampleSource,
@@ -121,41 +120,18 @@ self.onmessage = async ({
         "AAC audio export is unavailable in this browser. Try an updated Safari/iOS or another supported browser; audio will not be silently removed.",
       );
 
-    // The track's own displayWidth/displayHeight come from container
-    // metadata; on some mobile hardware decoders (Android in particular) the
-    // frames actually produced can disagree with that metadata for rotated
-    // footage, which is enough to throw off the geometry below and stretch
-    // the whole export on that device even though desktop -- reading the
-    // metadata correctly -- comes out fine. Decoding one real sample and
-    // trusting *its* reported dimensions instead removes that gap.
-    let sourceWidth = videoTrack.displayWidth,
-      sourceHeight = videoTrack.displayHeight,
-      rotation = videoTrack.rotation;
-    const probeSample = await new VideoSampleSink(videoTrack).getSample(0);
-    if (probeSample) {
-      sourceWidth = probeSample.displayWidth;
-      sourceHeight = probeSample.displayHeight;
-      rotation = probeSample.rotation;
-      probeSample.close();
-    }
-    const geometry = cropGeometry(
-      data.edit.crop,
-      sourceWidth,
-      sourceHeight,
-      width,
-      height,
-    );
+    const sourceWidth = await videoTrack.getDisplayWidth();
+    const sourceHeight = await videoTrack.getDisplayHeight();
+    const scale = Math.min(1, width / sourceWidth, height / sourceHeight);
+    // Decode a complete, aspect-preserving frame first. Do not hand the crop
+    // rectangle to the decoder: a native VideoFrame's own crop/resize path
+    // disagrees with the source rectangle we computed on some mobile decoders
+    // (Android especially), which stretched the entire export there while
+    // desktop came out fine. Cropping the normalized canvas below is plain 2D
+    // canvas maths, identical on every device.
     const sink = new CanvasSink(videoTrack, {
-      rotation,
-      crop: {
-        left: geometry.left,
-        top: geometry.top,
-        width: geometry.width,
-        height: geometry.height,
-      },
-      width: geometry.drawWidth,
-      height: geometry.drawHeight,
-      fit: "fill",
+      width: Math.max(2, Math.round(sourceWidth * scale)),
+      fit: "contain",
       poolSize: 2,
     });
     const canvas = new OffscreenCanvas(width, height);
@@ -206,7 +182,24 @@ self.onmessage = async ({
             "A source frame could not be decoded. Try an updated browser or a supported source.",
           );
         ctx.drawImage(data.artwork.background, 0, 0);
-        ctx.drawImage(frame.canvas, geometry.drawX, geometry.drawY);
+        const geometry = cropGeometry(
+          data.edit.crop,
+          frame.canvas.width,
+          frame.canvas.height,
+          width,
+          height,
+        );
+        ctx.drawImage(
+          frame.canvas,
+          geometry.left,
+          geometry.top,
+          geometry.width,
+          geometry.height,
+          geometry.drawX,
+          geometry.drawY,
+          geometry.drawWidth,
+          geometry.drawHeight,
+        );
         for (const overlay of data.artwork.overlays) {
           if (
             time.sourceTime * 1000 >= overlay.startMs &&
