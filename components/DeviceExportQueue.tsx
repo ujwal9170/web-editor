@@ -20,7 +20,7 @@ export default function DeviceExportQueue({
   // quietly reset: the row then sat on screen for about half a minute.
   if (!rows.length) return null;
   return (
-    <aside className="device-export-queue" aria-label="Device export queue">
+    <aside className={`device-export-queue${expanded ? " expanded" : " compact"}`} aria-label="Device export queue">
       <button
         className="subtle"
         aria-expanded={expanded}
@@ -33,7 +33,6 @@ export default function DeviceExportQueue({
         <button className="queue-dismiss" aria-label="Dismiss completed and failed exports"
           onClick={() => rows.filter(r => ["done", "failed", "cancelled"].includes(r.status)).forEach(r => dismiss(r.id))}>✕</button>
       )}
-      {!expanded && <p className="hint">{rows.find(r => ["running", "saving"].includes(r.status))?.detail || rows.at(-1)?.detail} · Tap to manage</p>}
       <span className="sr-only" role="status">
         {rows.at(-1)?.status === "done"
           ? "Export complete. Open Edited videos."

@@ -119,6 +119,10 @@ export default function Editor({
       y: number;
     } | null>(null),
     [selectedTextId, setSelectedTextId] = useState<string | null>(null),
+    [videoSelected, setVideoSelected] = useState(false),
+    [blurSelected, setBlurSelected] = useState(false),
+    [fullscreenPreview, setFullscreenPreview] = useState(false),
+    [liveVideoZoom, setLiveVideoZoom] = useState<number | null>(null),
     [videoMenuOpen, setVideoMenuOpen] = useState(false),
     [mediaPicker, setMediaPicker] = useState<Media[] | null>(null),
     [replacing, setReplacing] = useState(false),
@@ -151,7 +155,11 @@ export default function Editor({
       boxWidthPx: number;
       boxHeightPx: number;
       moved: boolean;
+      allowed: boolean;
     } | null>(null);
+  const videoPointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ distance: number; zoom: number; value: number } | null>(null);
+  const liveZoomRef = useRef<number | null>(null);
   const media = initial.media!,
     duration = media.duration;
   // Where the video itself actually draws on the 9:16 canvas right now --
@@ -164,7 +172,7 @@ export default function Editor({
   const videoRect =
     media.width && media.height
       ? cropGeometry(
-          edit.crop,
+          { ...edit.crop, zoom: liveVideoZoom ?? edit.crop.zoom },
           media.width,
           media.height,
           previewCanvasWidth,
@@ -238,6 +246,7 @@ export default function Editor({
   // freehand drag into a real change() before closing, so nothing dragged
   // right before closing is ever silently lost.
   function closeSheet() {
+    setTab("");
     endTextInput();
     setSheetOpen(false);
     exitFreehand();
@@ -424,6 +433,8 @@ export default function Editor({
   // view in the (short, scrollable) panel, so you don't have to go hunting
   // for the right one among several.
   function selectOverlay(id: string) {
+    setBlurSelected(false);
+    setVideoSelected(false);
     setSelectedTextId(id);
     revealOverlayCard(id);
   }
@@ -570,6 +581,7 @@ export default function Editor({
     let lastEdit: Edit | null = null, lastTime = -1, lastDraw = 0, lastReady = -1;
     let lastPanX: number | null = null, lastPanY: number | null = null;
     let lastBlur: BlurRegion | null = null;
+    let lastZoom: number | null = null;
     const draw = () => {
       const v = video.current,
         ctx = canvas.current?.getContext("2d");
@@ -602,15 +614,15 @@ export default function Editor({
             lastReady !== v.readyState ||
             lastPanX !== live?.x ||
             lastPanY !== live?.y ||
-            lastBlur !== blur)
+            lastBlur !== blur || lastZoom !== liveZoomRef.current)
         ) {
           let drawEdit = live
             ? {
                 ...current.current,
                 crop: {
                   ...current.current.crop,
-                  offsetX: live.x,
-                  offsetY: live.y,
+                  centerX: live.x,
+                  centerY: live.y,
                 },
               }
             : current.current;
@@ -618,6 +630,7 @@ export default function Editor({
           // preview has to be told about the one under the pointer or the
           // blur would only catch up once the drag ended.
           if (blur) drawEdit = { ...drawEdit, blur };
+          if (liveZoomRef.current !== null) drawEdit = { ...drawEdit, crop: { ...drawEdit.crop, zoom: liveZoomRef.current } };
           preview(ctx, v, drawEdit);
           lastDraw = now;
           lastEdit = current.current;
@@ -626,6 +639,7 @@ export default function Editor({
           lastPanX = live?.x ?? null;
           lastPanY = live?.y ?? null;
           lastBlur = blur;
+          lastZoom = liveZoomRef.current;
         }
       }
       frame = requestAnimationFrame(draw);
@@ -676,6 +690,8 @@ export default function Editor({
   // there is no sheet, so the panel and its highlighted tab stayed lit with
   // no way to put them away.
   function retireTool() {
+    setBlurSelected(false);
+    setVideoSelected(false);
     if (sheetOpen) closeSheet();
     setTab("");
     setSelectedTextId(null);
@@ -690,20 +706,31 @@ export default function Editor({
     // default tab -- so this also drives that same long-press timer;
     // panMove cancels it the moment an actual drag is detected.
     e.stopPropagation();
+    e.preventDefault();
+    videoPointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (videoPointers.current.size > 1) {
+      cancelLongPress();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      if (panDrag.current?.allowed && videoPointers.current.size === 2) {
+        const [a, b] = [...videoPointers.current.values()];
+        const zoom = edit.crop.zoom ?? 1;
+        pinch.current = { distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), zoom, value: zoom };
+      }
+      return;
+    }
     startLongPress(e);
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = e.currentTarget.getBoundingClientRect();
     if (!videoRect) return;
-    const availX = Math.max(0, previewCanvasWidth - videoRect.drawWidth),
-      availY = Math.max(0, previewCanvasHeight - videoRect.drawHeight);
     panDrag.current = {
       startX: e.clientX,
       startY: e.clientY,
-      startOffsetX: availX > 0 ? videoRect.drawX / availX : 0.5,
-      startOffsetY: availY > 0 ? videoRect.drawY / availY : 0.5,
+      startOffsetX: (videoRect.drawX + videoRect.drawWidth / 2) / previewCanvasWidth,
+      startOffsetY: (videoRect.drawY + videoRect.drawHeight / 2) / previewCanvasHeight,
       boxWidthPx: rect.width,
       boxHeightPx: rect.height,
       moved: false,
+      allowed: videoSelected && selectedTextId === null,
     };
   }
   function easePan(raw: number) {
@@ -714,6 +741,18 @@ export default function Editor({
   }
   function panMove(e: ReactPointerEvent<HTMLDivElement>) {
     moveLongPress(e);
+    if (!videoPointers.current.has(e.pointerId)) return;
+    videoPointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch.current) {
+      if (videoPointers.current.size === 2) {
+        const [a, b] = [...videoPointers.current.values()];
+        const p = pinch.current;
+        p.value = Math.min(4, Math.max(0.25, p.zoom * Math.hypot(a.x - b.x, a.y - b.y) / p.distance));
+        liveZoomRef.current = p.value;
+        setLiveVideoZoom(p.value);
+      }
+      return;
+    }
     const d = panDrag.current;
     if (!d || d.boxWidthPx <= 0 || d.boxHeightPx <= 0 || !videoRect) return;
     const pixelDx = e.clientX - d.startX,
@@ -725,30 +764,16 @@ export default function Editor({
     )
       return;
     d.moved = true;
-    const availX = Math.max(0, previewCanvasWidth - videoRect.drawWidth),
-      availY = Math.max(0, previewCanvasHeight - videoRect.drawHeight);
+    if (!d.allowed) return;
     // d.boxWidthPx/boxHeightPx are the on-screen pixel size of the video's
     // own draw rect (captured in panDown), matching videoRect.drawWidth/
     // drawHeight in canvas units -- that ratio converts a screen pixel to
     // canvas units, then to a fraction of the available offset range.
     const unitsPerPxX = videoRect.drawWidth / d.boxWidthPx,
       unitsPerPxY = videoRect.drawHeight / d.boxHeightPx;
-    const rawX =
-        availX > 0
-          ? Math.min(
-              1,
-              Math.max(0, d.startOffsetX + (pixelDx * unitsPerPxX) / availX),
-            )
-          : 0.5,
-      rawY =
-        availY > 0
-          ? Math.min(
-              1,
-              Math.max(0, d.startOffsetY + (pixelDy * unitsPerPxY) / availY),
-            )
-          : 0.5;
-    const easedX = availX > 0 ? easePan(rawX) : { value: 0.5, near: false },
-      easedY = availY > 0 ? easePan(rawY) : { value: 0.5, near: false };
+    const rawX = Math.min(1, Math.max(0, d.startOffsetX + pixelDx * unitsPerPxX / previewCanvasWidth)),
+      rawY = Math.min(1, Math.max(0, d.startOffsetY + pixelDy * unitsPerPxY / previewCanvasHeight));
+    const easedX = easePan(rawX), easedY = easePan(rawY);
     liveOffset.current = { x: easedX.value, y: easedY.value };
     // The X guide is a vertical line shown while X is near center (and vice
     // versa) -- each marks the axis currently aligned, like a crosshair.
@@ -757,25 +782,40 @@ export default function Editor({
     if (panGuideY.current)
       panGuideY.current.style.opacity = easedY.near ? "1" : "0";
   }
-  function panUp() {
+  function panUp(e: ReactPointerEvent<HTMLDivElement>) {
     cancelLongPress();
-    if (panDrag.current?.moved && liveOffset.current)
+    videoPointers.current.delete(e.pointerId);
+    if (e.type === "pointercancel") {
+      videoPointers.current.clear();
+      liveOffset.current = null;
+      pinch.current = null;
+      panDrag.current = null;
+    }
+    if (videoPointers.current.size) return;
+    if ((panDrag.current?.moved && liveOffset.current) || pinch.current)
       change({
         ...edit,
         crop: {
           ...edit.crop,
-          offsetX: liveOffset.current.x,
-          offsetY: liveOffset.current.y,
+          ...(liveOffset.current ? { centerX: liveOffset.current.x, centerY: liveOffset.current.y } : {}),
+          ...(pinch.current ? { zoom: pinch.current.value } : {}),
         },
       });
     // The pan layer covers the whole video, so a tap that never became a drag
     // is the "I'm done with that tool" tap the stage underneath would have
     // handled. Only a real drag is exempt.
-    else if (panDrag.current && !panDrag.current.moved) retireTool();
+    else if (panDrag.current && !panDrag.current.moved) {
+      setBlurSelected(false);
+      setSelectedTextId(null);
+      setVideoSelected(true);
+    }
     if (panGuideX.current) panGuideX.current.style.opacity = "0";
     if (panGuideY.current) panGuideY.current.style.opacity = "0";
     liveOffset.current = null;
     panDrag.current = null;
+    pinch.current = null;
+    liveZoomRef.current = null;
+    setLiveVideoZoom(null);
   }
   function split() {
     const ms = time * 1000,
@@ -862,7 +902,8 @@ export default function Editor({
       .filter((s) => s.enabled)
       .reduce((a, s) => a + s.endMs - s.startMs, 0) / 1000;
   return (
-    <section className="editor" ref={editorRoot}>
+    <section className={`editor${fullscreenPreview ? " fullscreen-preview" : ""}`} ref={editorRoot}
+      onKeyDown={(e) => { if (e.key === "Escape") setFullscreenPreview(false); }}>
       <div className="editor-heading">
         {onBack && (
           <button
@@ -975,6 +1016,11 @@ export default function Editor({
             onPointerUp={cancelLongPress}
             onPointerCancel={cancelLongPress}
           >
+            <button className="preview-fullscreen-button" aria-label={fullscreenPreview ? "Exit fullscreen preview" : "Fullscreen preview"}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => { endTextInput(); exitFreehand(); setFullscreenPreview(v => !v); }}>
+              {fullscreenPreview ? "✕" : "⛶"}
+            </button>
             <canvas
               ref={canvas}
               aria-label="Edited video preview"
@@ -1026,7 +1072,7 @@ export default function Editor({
                 style={{ aspectRatio: "9 / 16" }}
               >
                 <div
-                  className="crop-pan-frame"
+                  className={`crop-pan-frame${videoSelected && selectedTextId === null ? " selected" : ""}`}
                   style={{
                     left: `${(videoRect.drawX / previewCanvasWidth) * 100}%`,
                     top: `${(videoRect.drawY / previewCanvasHeight) * 100}%`,
@@ -1052,8 +1098,8 @@ export default function Editor({
             {!freehand && (liveBlur ?? edit.blur) && (
               <BlurOverlay
                 region={(liveBlur ?? edit.blur)!}
-                active={tab === "blur"}
-                onGrab={() => setTab("blur")}
+                active={blurSelected && !selectedTextId && !videoSelected}
+                onGrab={() => { setBlurSelected(true); setSelectedTextId(null); setVideoSelected(false); }}
                 onDelete={() => {
                   liveBlurRef.current = null;
                   setLiveBlur(null);
@@ -1106,6 +1152,7 @@ export default function Editor({
                         onGrab={() => setTab("text")}
                         onTap={() => selectOverlay(t.id)}
                         onDelete={() => removeOverlay(t.id)}
+                        onCancel={() => setLiveTextPos(null)}
                         onChange={(x, y) =>
                           setLiveTextPos({ id: t.id, x, y })
                         }
@@ -1283,8 +1330,8 @@ export default function Editor({
                     // which is how CapCut/InShot behave; on desktop the panel
                     // is always visible so this only ever switches tabs.
                     setTemplateStripOpen(false);
-                    if (tab === key) {
-                      setSheetOpen((v) => !v);
+                    if (tab === key && sheetOpen) {
+                      closeSheet();
                       exitFreehand();
                       setLiveTextPos(null);
                       setSelectedTextId(null);
@@ -1641,7 +1688,7 @@ export default function Editor({
                     className={`text-card${selectedTextId === t.id ? " selected" : ""}`}
                     key={t.id}
                     data-overlay-card={t.id}
-                    onFocusCapture={() => setSelectedTextId(t.id)}
+                    onFocusCapture={() => { setVideoSelected(false); setSelectedTextId(t.id); }}
                   >
                     <label>
                       Text
@@ -2174,12 +2221,15 @@ function BlurOverlay({
     start: BlurRegion;
     width: number;
     height: number;
+    allowed: boolean;
+    moved: boolean;
+    pointerId: number;
   } | null>(null);
   function down(handle: DragHandle | "move") {
     return (e: ReactPointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      onGrab();
+      if (drag.current) return;
       e.currentTarget.setPointerCapture(e.pointerId);
       const rect = box.current?.getBoundingClientRect();
       if (!rect) return;
@@ -2190,12 +2240,18 @@ function BlurOverlay({
         start: region,
         width: rect.width,
         height: rect.height,
+        allowed: active,
+        moved: false,
+        pointerId: e.pointerId,
       };
     };
   }
   function move(e: ReactPointerEvent) {
     const d = drag.current;
-    if (!d || d.width <= 0 || d.height <= 0) return;
+    if (!d || d.pointerId !== e.pointerId || d.width <= 0 || d.height <= 0) return;
+    if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < TAP_THRESHOLD && !d.moved) return;
+    d.moved = true;
+    if (!d.allowed) return;
     const dx = (e.clientX - d.startX) / d.width,
       dy = (e.clientY - d.startY) / d.height;
     let { x, y, width, height } = d.start;
@@ -2228,8 +2284,11 @@ function BlurOverlay({
     }
     onChange({ ...d.start, x, y, width, height });
   }
-  function up() {
-    if (drag.current) onCommit();
+  function up(e: ReactPointerEvent) {
+    if (drag.current?.pointerId !== e.pointerId) return;
+    if (e.type === "pointercancel") onChange(drag.current.start);
+    else if (drag.current.allowed && drag.current.moved) onCommit();
+    else if (!drag.current.moved) onGrab();
     drag.current = null;
     setSnapped({ x: false, y: false });
   }
@@ -2274,7 +2333,7 @@ function BlurOverlay({
             <X size={14} />
           </button>
         )}
-        {handles.map((h) => (
+        {active && handles.map((h) => (
           <span
             key={h}
             className={`blur-handle blur-handle-${h}`}
@@ -2314,6 +2373,7 @@ function TextDragHandle({
   onGrab,
   onTap,
   onDelete,
+  onCancel,
   onChange,
   onCommit,
 }: {
@@ -2326,6 +2386,7 @@ function TextDragHandle({
   onGrab: () => void;
   onTap: () => void;
   onDelete: () => void;
+  onCancel: () => void;
   onChange: (x: number, y: number) => void;
   onCommit: () => void;
 }) {
@@ -2337,10 +2398,13 @@ function TextDragHandle({
     boxWidth: number;
     boxHeight: number;
     moved: boolean;
+    allowed: boolean;
+    pointerId: number;
   } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [snapped, setSnapped] = useState({ x: false, y: false });
   function down(e: ReactPointerEvent<HTMLDivElement>) {
+    if (drag.current) { e.stopPropagation(); return; }
     onGrab();
     e.preventDefault();
     // Stops the preview stage's own pointerdown (which deselects whatever
@@ -2358,12 +2422,14 @@ function TextDragHandle({
       boxWidth: rect.width,
       boxHeight: rect.height,
       moved: false,
+      allowed: selected,
+      pointerId: e.pointerId,
     };
-    setDragging(true);
+    setDragging(selected);
   }
   function move(e: ReactPointerEvent<HTMLDivElement>) {
     const d = drag.current;
-    if (!d || d.boxWidth <= 0 || d.boxHeight <= 0) return;
+    if (!d || d.pointerId !== e.pointerId || d.boxWidth <= 0 || d.boxHeight <= 0) return;
     const pixelDx = e.clientX - d.startX,
       pixelDy = e.clientY - d.startY;
     if (
@@ -2373,6 +2439,7 @@ function TextDragHandle({
     )
       return;
     d.moved = true;
+    if (!d.allowed) return;
     // Capped at 0.9 rather than 1 -- dragging text flush to the video's
     // right/bottom edge crops it against safe-zone overlays (captions, UI
     // chrome) on most platforms it gets reposted to. Top and left get their
@@ -2391,9 +2458,11 @@ function TextDragHandle({
     setSnapped({ x: x !== rawX, y: y !== rawY });
     onChange(x, y);
   }
-  function up() {
-    if (drag.current?.moved) onCommit();
-    else if (drag.current) onTap();
+  function up(e: ReactPointerEvent<HTMLDivElement>) {
+    if (drag.current?.pointerId !== e.pointerId) return;
+    if (e.type === "pointercancel") onCancel();
+    else if (drag.current?.moved && drag.current.allowed) onCommit();
+    else if (drag.current && !drag.current.moved) onTap();
     drag.current = null;
     setDragging(false);
     setSnapped({ x: false, y: false });

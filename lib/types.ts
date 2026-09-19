@@ -37,6 +37,9 @@ export type Edit = {
     height: number;
     offsetX?: number;
     offsetY?: number;
+    zoom?: number;
+    centerX?: number;
+    centerY?: number;
   };
   segments: Segment[];
   textOverlays: Overlay[];

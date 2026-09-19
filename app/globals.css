@@ -1234,6 +1234,35 @@ header {
 .crop-pan-frame:active {
   cursor: grabbing;
 }
+.crop-pan-frame.selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.preview-fullscreen-button {
+  position: absolute; left: 10px; bottom: 10px; z-index: 15;
+  width: 38px; height: 38px; padding: 0; border-radius: 8px;
+  background: #111c; color: white; font-size: 25px;
+}
+.editor.fullscreen-preview .preview-column {
+  position: fixed !important; inset: 0 !important; z-index: 100;
+  width: 100% !important; height: 100dvh !important;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) !important;
+  display: flex !important; flex-direction: column; background: #000;
+}
+.editor.fullscreen-preview .preview-stage { flex: 1; min-height: 0 !important; }
+.editor.fullscreen-preview .timeline,
+.editor.fullscreen-preview .tool-tabs,
+.editor.fullscreen-preview .inspector { display: none !important; }
+.editor.fullscreen-preview .crop-pan-outer,
+.editor.fullscreen-preview .text-drag-frame,
+.editor.fullscreen-preview .blur-overlay { display: none; }
+.device-export-queue.compact { width: auto; max-width: calc(100vw - 24px); padding: 5px 8px; border-radius: 10px; }
+.device-export-queue.compact > .subtle { min-height: 34px; padding: 5px 8px; font-size: 12px; border: 0; background: transparent; }
+.device-export-queue.compact:has(.queue-dismiss) { padding-right: 42px; }
+.device-export-queue.compact > .subtle { max-width: 100%; }
+.blur-frame.dormant, .blur-frame.dormant:hover { border-color: transparent !important; background: transparent !important; box-shadow: none !important; }
+.blur-frame .blur-handle-tl, .blur-frame .blur-handle-tr { top: -14px; }
+.blur-frame .blur-handle-bl, .blur-frame .blur-handle-br { bottom: -14px; }
 /* Center alignment guides: hidden by default, faded in imperatively (see
    Editor.tsx panMove) while a drag is within the magnetic zone on that
    axis -- kept off React state so they can update every pointermove

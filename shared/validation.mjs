@@ -32,6 +32,9 @@ export const editSchema = z.object({
       // shared/export.mjs), which a hardcoded default here would erase.
       offsetX: unit.optional(),
       offsetY: unit.optional(),
+      zoom: z.number().finite().min(0.25).max(4).optional(),
+      centerX: unit.optional(),
+      centerY: unit.optional(),
     })
     .refine(
       (c) => c.x + c.width <= 1.001 && c.y + c.height <= 1.001,

@@ -24,6 +24,9 @@ export type Crop = {
   // in shared/export.mjs. Absent means "wherever cropping alone implies."
   offsetX?: number;
   offsetY?: number;
+  zoom?: number;
+  centerX?: number;
+  centerY?: number;
 };
 // Smallest fraction of the source either dimension may keep -- below this a
 // drag handle or a symmetric slider could invert or zero out the crop.
@@ -175,7 +178,7 @@ export function measureOverlay(
 // pixel-identical output whether the frame source is a <video> or a decoded
 // export frame.
 // Smallest blur box that's still grabbable by its handles on a phone.
-export const MIN_BLUR = 0.06;
+export const MIN_BLUR = 0.01;
 // Breadth goes much narrower than height: hiding a handle, a timestamp or a
 // watermark strip wants a thin vertical band, and 0.015 of 1080 is still 16
 // real pixels wide. It stays usable that narrow because the corner handles

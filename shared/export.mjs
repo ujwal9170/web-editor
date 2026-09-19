@@ -107,14 +107,16 @@ export function cropGeometry(crop, sourceWidth, sourceHeight, width, height) {
   const defaultOffsetY = availY > 0 ? pinnedY / availY : 0.5;
   const offsetX = Math.min(1, Math.max(0, crop.offsetX ?? defaultOffsetX));
   const offsetY = Math.min(1, Math.max(0, crop.offsetY ?? defaultOffsetY));
+  // Zoom the placed object around its centre, never change the source crop.
+  const zoom = Math.min(4, Math.max(0.25, crop.zoom ?? 1));
   return {
     left,
     top,
     width: sw,
     height: sh,
-    drawX: availX * offsetX,
-    drawY: availY * offsetY,
-    drawWidth,
-    drawHeight,
+    drawX: (crop.centerX == null ? availX * offsetX + drawWidth / 2 : crop.centerX * width) - drawWidth * zoom / 2,
+    drawY: (crop.centerY == null ? availY * offsetY + drawHeight / 2 : crop.centerY * height) - drawHeight * zoom / 2,
+    drawWidth: drawWidth * zoom,
+    drawHeight: drawHeight * zoom,
   };
 }
