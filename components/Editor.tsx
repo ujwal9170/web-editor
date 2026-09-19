@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import Slider from "@/components/Slider";
+import { useEditorViewport } from "@/lib/useEditorViewport";
 import {
   Play,
   Pause,
@@ -75,6 +76,8 @@ export default function Editor({
   onBack?: () => void;
   onDelete?: () => void;
 }) {
+  const editorRoot = useRef<HTMLElement>(null);
+  useEditorViewport(editorRoot);
   const [edit, setEdit] = useState<Edit>(initial.edit),
     [name, setName] = useState(initial.name),
     [caption, setCaption] = useState(initial.caption),
@@ -790,7 +793,7 @@ export default function Editor({
       .filter((s) => s.enabled)
       .reduce((a, s) => a + s.endMs - s.startMs, 0) / 1000;
   return (
-    <section className="editor">
+    <section className="editor" ref={editorRoot}>
       <div className="editor-heading">
         {onBack && (
           <button

@@ -1887,6 +1887,8 @@ header {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+.queue-dismiss { position: absolute; top: 8px; right: 8px; min-height: 44px; min-width: 44px; }
+.device-export-queue > .subtle { max-width: calc(100% - 44px); }
 .color-input {
   display: flex;
   align-items: center;
@@ -2774,3 +2776,45 @@ header {
 .device-export-row { padding: 10px 0; border-top: 1px solid #343a3c; }
 .device-export-row strong { display: block; overflow-wrap: anywhere; font-size: 13px; }
 .device-export-row p { font-size: 12px; margin: 4px 0; }
+
+/* One coordinate system for the preview, tool rail and keyboard-facing sheet. */
+@media (max-width: 760px) {
+  .studio.editing .editor {
+    position: fixed;
+    top: var(--editor-visible-top, 0px);
+    left: 0;
+    right: 0;
+    height: var(--editor-visible-height, 100dvh);
+    overscroll-behavior: none;
+  }
+  .editor .edit-workspace, .editor .inspector { position: static; }
+  .editor .inspector { overflow: visible; }
+  .editor .tool-tabs {
+    position: absolute;
+    max-height: calc(100% - 100px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .editor .inspector.sheet-open .tool-body {
+    position: absolute;
+    right: 68px;
+    height: 28%;
+    max-height: calc(100% - 90px);
+    padding-right: 12px;
+  }
+  .editor .inspector.sheet-open.freehand-open .tool-body { height: auto; }
+  .editor input, .editor textarea, .editor select { font-size: 16px; }
+  .editor.keyboard-editing .tool-tabs,
+  .editor.keyboard-editing .timeline,
+  .editor.keyboard-editing .playback { display: none; }
+  .editor.keyboard-editing .preview-column { padding-right: 0; padding-bottom: 150px; }
+  .editor.keyboard-editing .preview-stage { min-height: 0; }
+  .editor.keyboard-editing .inspector.sheet-open .tool-body {
+    right: 0;
+    height: 150px;
+    max-height: 48%;
+  }
+  .editor.keyboard-editing .inspector.typing .tool-body { height: 120px; }
+  .editor.keyboard-editing .inspector.typing .text-card { margin: 0; padding: 8px; }
+  .editor.keyboard-editing .inspector.typing textarea { height: 64px; min-height: 64px; }
+}

@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { exportQueueLabel } from "@/shared/mobile-ui.mjs";
 import type { ExportRow } from "@/lib/useDeviceExports";
 export default function DeviceExportQueue({
   rows,
@@ -18,9 +19,6 @@ export default function DeviceExportQueue({
   // timer held in a ref on this component, which a remount during the export
   // quietly reset: the row then sat on screen for about half a minute.
   if (!rows.length) return null;
-  const pending = rows.filter((r) =>
-    ["queued", "running", "saving"].includes(r.status),
-  ).length;
   return (
     <aside className="device-export-queue" aria-label="Device export queue">
       <button
@@ -28,9 +26,13 @@ export default function DeviceExportQueue({
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
       >
-        Device exports · {pending ? `${pending} pending` : "Finished"}{" "}
+        Device exports · {exportQueueLabel(rows)}{" "}
         {expanded ? "▾" : "▴"}
       </button>
+      {rows.some(r => ["done", "failed", "cancelled"].includes(r.status)) && (
+        <button className="queue-dismiss" aria-label="Dismiss completed and failed exports"
+          onClick={() => rows.filter(r => ["done", "failed", "cancelled"].includes(r.status)).forEach(r => dismiss(r.id))}>✕</button>
+      )}
       {!expanded && <p className="hint">{rows.find(r => ["running", "saving"].includes(r.status))?.detail || rows.at(-1)?.detail} · Tap to manage</p>}
       <span className="sr-only" role="status">
         {rows.at(-1)?.status === "done"
