@@ -33,6 +33,8 @@ import {
   Minus,
   Droplet,
   Copy,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 // Only the editor's Text tab ever renders these -- loaded here instead of
 // the root layout so pages that never open the editor never pay for them.
@@ -160,6 +162,13 @@ export default function Editor({
   const videoPointers = useRef(new Map<number, { x: number; y: number }>());
   const pinch = useRef<{ distance: number; zoom: number; value: number } | null>(null);
   const liveZoomRef = useRef<number | null>(null);
+  useEffect(() => {
+    const handleFullscreen = () => {
+      if (!document.fullscreenElement) setFullscreenPreview(false);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreen);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreen);
+  }, []);
   const media = initial.media!,
     duration = media.duration;
   // Where the video itself actually draws on the 9:16 canvas right now --
@@ -1016,11 +1025,21 @@ export default function Editor({
             onPointerUp={cancelLongPress}
             onPointerCancel={cancelLongPress}
           >
-            <button className="preview-fullscreen-button" aria-label={fullscreenPreview ? "Exit fullscreen preview" : "Fullscreen preview"}
+            <div className="preview-screen-controls"><button className="preview-fullscreen-button" aria-label={fullscreenPreview ? "Exit fullscreen preview" : "Fullscreen preview"}
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => { endTextInput(); exitFreehand(); setFullscreenPreview(v => !v); }}>
-              {fullscreenPreview ? "✕" : "⛶"}
-            </button>
+              onClick={() => {
+                endTextInput(); exitFreehand();
+                if (fullscreenPreview) {
+                  setFullscreenPreview(false);
+                  if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+                } else {
+                  setFullscreenPreview(true);
+                  // Unsupported mobile browsers retain the viewport-filling preview.
+                  void editorRoot.current?.requestFullscreen?.().catch(() => {});
+                }
+              }}>
+              {fullscreenPreview ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+            </button></div>
             <canvas
               ref={canvas}
               aria-label="Edited video preview"

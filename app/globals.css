@@ -2970,3 +2970,58 @@ header {
   .editor.keyboard-editing .inspector:has(.text-card textarea:focus) .tool-body { height: 100%; max-height: none; }
   .editor.keyboard-editing .inspector:has(.text-card textarea:focus) .text-card > label ~ label { display: none; }
 }
+
+/* Final overrides: a clean reel-sized composition, not an enlarged editor. */
+.preview-stage { container-type: size; }
+.preview-screen-controls {
+  position: absolute; inset: 0; margin: auto; aspect-ratio: 9 / 16;
+  max-width: 100%; max-height: 100%; pointer-events: none; z-index: 20;
+  width: min(100cqw, 56.25cqh); height: min(100cqh, 177.7778cqw);
+}
+.preview-fullscreen-button {
+  left: auto; right: 8px; bottom: 8px; width: 34px; height: 34px;
+  min-height: 34px; display: grid; place-items: center; pointer-events: auto;
+  border: 1px solid #ffffff40; border-radius: 7px; background: #0009;
+}
+.editor.fullscreen-preview {
+  position: fixed !important; inset: 0 !important; width: 100vw !important;
+  height: 100dvh !important; z-index: 200; margin: 0; padding: 0;
+  display: block; background: #000; overflow: hidden;
+}
+.editor.fullscreen-preview > :not(.edit-workspace) { display: none !important; }
+.editor.fullscreen-preview .edit-workspace {
+  display: block !important; height: 100% !important; padding: 0 !important;
+}
+.editor.fullscreen-preview .preview-column {
+  position: absolute !important; inset: 0 !important; height: 100% !important;
+  padding: 0 !important; gap: 0; overflow: hidden;
+}
+.editor.fullscreen-preview .preview-stage {
+  flex: 1 1 0; height: auto !important; min-height: 0 !important;
+  padding: 0 !important; margin: 0; border: 0; border-radius: 0; background: #000;
+}
+.editor.fullscreen-preview .preview-stage canvas {
+  width: auto !important; height: 100% !important; max-width: 100%;
+  max-height: 100%; aspect-ratio: 9 / 16; object-fit: contain; box-shadow: none;
+}
+.editor.fullscreen-preview .playback {
+  flex: 0 0 auto; height: 48px; min-height: 48px; margin: 0;
+  padding: 4px 12px max(4px, env(safe-area-inset-bottom)); gap: 10px;
+  border: 0; background: #000; font-size: 11px;
+}
+.editor.fullscreen-preview .play-button { width: 32px; height: 32px; min-height: 32px; padding: 7px; }
+.editor.fullscreen-preview .play-button svg { width: 18px; height: 18px; }
+/* Small visible square grips with outward touch targets; no large circles. */
+.blur-frame .blur-handle, .blur-frame.narrow .blur-handle {
+  width: 9px; height: 9px; border-radius: 2px; border: 1px solid #111;
+  background: var(--accent);
+}
+.blur-frame .blur-handle::after { content: ""; position: absolute; width: 24px; height: 24px; }
+.blur-frame .blur-handle-tl, .blur-frame.narrow .blur-handle-tl { top: -5px; left: -5px; }
+.blur-frame .blur-handle-tr, .blur-frame.narrow .blur-handle-tr { top: -5px; right: -5px; }
+.blur-frame .blur-handle-bl, .blur-frame.narrow .blur-handle-bl { bottom: -5px; left: -5px; }
+.blur-frame .blur-handle-br, .blur-frame.narrow .blur-handle-br { bottom: -5px; right: -5px; }
+.blur-handle-tl::after { right: 0; bottom: 0; }
+.blur-handle-tr::after { left: 0; bottom: 0; }
+.blur-handle-bl::after { right: 0; top: 0; }
+.blur-handle-br::after { left: 0; top: 0; }
