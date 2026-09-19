@@ -383,9 +383,20 @@ export default function Editor({
   // for the right one among several.
   function selectOverlay(id: string) {
     setSelectedTextId(id);
-    document
-      .querySelector(`[data-overlay-card="${id}"]`)
-      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    requestAnimationFrame(() => {
+      const panel = toolBody.current;
+      const card = panel?.querySelector<HTMLElement>(`[data-overlay-card="${id}"]`);
+      if (!panel || !card) return;
+      const header = panel.querySelector<HTMLElement>(".sheet-header");
+      const inset = (header?.getBoundingClientRect().height || 0) + 12;
+      // Scroll this panel only. Align the text field's card below the sticky
+      // header; "nearest" favours the card's bottom when the card is taller
+      // than the panel, hiding the field the user actually wanted to edit.
+      panel.scrollTo({
+        top: Math.max(0, panel.scrollTop + card.getBoundingClientRect().top - panel.getBoundingClientRect().top - inset),
+        behavior: "instant",
+      });
+    });
   }
   // The drag handle's size in canvas fractions, from the text's *actual*
   // measured footprint -- not a guess -- so grabbing it feels like grabbing
@@ -1249,7 +1260,7 @@ export default function Editor({
               ),
             )}
           </div>
-          <div className="tool-body" ref={toolBody}>
+          <div className="tool-body" ref={toolBody} data-tool={tab}>
             <div className="sheet-header">
               <span className="sheet-grip" aria-hidden="true" />
               <button
@@ -1645,8 +1656,8 @@ export default function Editor({
                       ["x", "Horizontal", 0, 1],
                       ["y", "Vertical", 0, 1],
                     ].map(([key, label, min, max]) => (
-                      <label key={key}>
-                        {label}
+                      <label key={key} className="text-slider-row">
+                        <span>{label}</span>
                         <Slider
                           ariaLabel={`${label} for this text`}
                           min={Number(min)}
