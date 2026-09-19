@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import Slider from "@/components/Slider";
+import CustomColor from "@/components/CustomColor";
 import { useEditorViewport } from "@/lib/useEditorViewport";
 import {
   Play,
@@ -1488,14 +1489,10 @@ export default function Editor({
                   ? edit.canvas.background.colors
                   : edit.canvas.background.colors.slice(0, 1)
                 ).map((c, i) => (
-                  <label key={i}>
-                    Custom color{" "}
-                    {edit.canvas.background.type === "gradient" ? i + 1 : ""}
-                    <div className="color-input">
-                      <input
-                        type="color"
+                      <CustomColor key={i}
+                        label={`Custom color${edit.canvas.background.type === "gradient" ? ` ${i + 1}` : ""}`}
                         value={c}
-                        onChange={(e) =>
+                        onChange={(color) =>
                           change({
                             ...edit,
                             canvas: {
@@ -1503,16 +1500,13 @@ export default function Editor({
                               background: {
                                 ...edit.canvas.background,
                                 colors: edit.canvas.background.colors.map(
-                                  (x, j) => (i === j ? e.target.value : x),
+                                  (x, j) => (i === j ? color : x),
                                 ),
                               },
                             },
                           })
                         }
                       />
-                      <span>{c.toUpperCase()}</span>
-                    </div>
-                  </label>
                 ))}
                 {edit.canvas.background.type === "gradient" && (
                   <>
