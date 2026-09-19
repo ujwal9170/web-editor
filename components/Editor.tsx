@@ -100,6 +100,7 @@ export default function Editor({
     [freehand, setFreehand] = useState(false),
     [liveCrop, setLiveCrop] = useState<CropRect | null>(null),
     [liveBlur, setLiveBlur] = useState<BlurRegion | null>(null),
+    [typing, setTyping] = useState(false),
     [liveTextPos, setLiveTextPos] = useState<{
       id: string;
       x: number;
@@ -1175,7 +1176,7 @@ export default function Editor({
           </div>
         </div>
         <aside
-          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}${tab ? "" : " tool-idle"}${freehand ? " freehand-open" : ""}`}
+          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}${tab ? "" : " tool-idle"}${freehand ? " freehand-open" : ""}${typing ? " typing" : ""}`}
         >
           <div className="tool-tabs">
             {[
@@ -1600,6 +1601,8 @@ export default function Editor({
                         rows={2}
                         maxLength={500}
                         value={t.text}
+                        onFocus={() => setTyping(true)}
+                        onBlur={() => setTyping(false)}
                         onChange={(e) =>
                           updateOverlay(t.id, { text: e.target.value })
                         }

@@ -78,14 +78,41 @@ export function background(
 // them both by the drag clamp (Editor.tsx) and by the wrap below, so the two
 // can never disagree about where the usable frame ends.
 export const SAFE_ZONE = { top: 0.07, left: 0.07, right: 0.07 };
-// Breaks a paragraph at the last word that still fits. A word too long to fit
-// on its own is left alone -- fitText shrinks the font for that case, since
-// breaking mid-word would look worse than smaller text.
+// A word with no break in it that is wider than the line gets broken anyway,
+// at the last character that fits. Rare -- a pasted URL, a long hashtag -- but
+// without it such a word is the one thing that could still force the whole
+// block to shrink.
+function splitLongWord(ctx: Context2D, word: string, maxWidth: number) {
+  const parts: string[] = [];
+  let chunk = "";
+  for (const character of word) {
+    const candidate = chunk + character;
+    if (chunk && ctx.measureText(candidate).width > maxWidth) {
+      parts.push(chunk);
+      chunk = character;
+    } else chunk = candidate;
+  }
+  if (chunk) parts.push(chunk);
+  return parts;
+}
+// Breaks a paragraph at the last word that still fits, so a longer caption
+// costs a line rather than shrinking every word already on screen.
 function wrapParagraph(ctx: Context2D, text: string, maxWidth: number) {
   const out: string[] = [];
   for (const paragraph of text.split("\n")) {
     let line = "";
     for (const word of paragraph.split(" ")) {
+      // A word that cannot fit a line of its own is dealt with before it is
+      // joined to anything: checking only after joining missed the case where
+      // such a word starts the line, which is how one could still run past
+      // the edge.
+      if (ctx.measureText(word).width > maxWidth) {
+        if (line) out.push(line);
+        const parts = splitLongWord(ctx, word, maxWidth);
+        out.push(...parts.slice(0, -1));
+        line = parts.at(-1) ?? "";
+        continue;
+      }
       const candidate = line ? `${line} ${word}` : word;
       if (line && ctx.measureText(candidate).width > maxWidth) {
         out.push(line);
@@ -104,17 +131,10 @@ function fitText(ctx: Context2D, t: Overlay, width: number) {
   // Long text now runs onto another line at the safe edge instead of the
   // whole block shrinking to fit on one -- typing a longer caption should
   // cost a line, not the size of every word already there.
-  let lines = wrapParagraph(ctx, t.text, maxWidth);
-  const widest = Math.max(
-    1,
-    ...lines.map((line) => ctx.measureText(line).width),
-  );
-  if (widest > maxWidth) {
-    fontSize *= maxWidth / widest;
-    ctx.font = `700 ${fontSize}px "${t.font}"`;
-    lines = wrapParagraph(ctx, t.text, maxWidth);
-  }
-  return { lines, fontSize };
+  // No shrink-to-fit pass any more: wrapping breaks even an unbreakable word,
+  // so nothing can be too wide, and the size that was chosen is the size that
+  // renders however much gets typed.
+  return { lines: wrapParagraph(ctx, t.text, maxWidth), fontSize };
 }
 export function text(
   ctx: Context2D,

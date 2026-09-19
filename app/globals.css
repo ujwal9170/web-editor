@@ -2525,6 +2525,26 @@ header {
   .inspector.freehand-open .sheet-header {
     display: none;
   }
+  /* The whole point of typing a caption is watching it land on the video, and
+     a full panel plus the keyboard left none of the video showing. While a
+     text field has focus the sheet keeps just that field -- font, colour and
+     the rest are still a tap away once the keyboard is down. */
+  .inspector.typing .tool-body {
+    height: auto;
+  }
+  .inspector.typing .sheet-header,
+  .inspector.typing .tool-body > h2,
+  .inspector.typing .tool-body > button,
+  .inspector.typing .text-card:not(.selected),
+  .inspector.typing .text-card > label ~ label,
+  .inspector.typing .text-card > button,
+  .inspector.typing .text-card > div {
+    display: none;
+  }
+  .inspector.typing .text-card textarea {
+    min-height: 44px;
+    height: 44px;
+  }
   /* The clip track is left exactly where it is; the sheet covers it. Hiding
      it (either way) only reintroduced the reflow the sheet's fixed position
      just removed. */
