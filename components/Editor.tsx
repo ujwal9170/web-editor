@@ -163,6 +163,20 @@ export default function Editor({
   const pinch = useRef<{ distance: number; zoom: number; value: number } | null>(null);
   const liveZoomRef = useRef<number | null>(null);
   useEffect(() => {
+    const element = canvas.current, stage = element?.parentElement;
+    if (!element || !stage) return;
+    const measure = () => {
+      const rect = element.getBoundingClientRect(), parent = stage.getBoundingClientRect();
+      stage.style.setProperty("--composition-left", `${rect.left - parent.left - stage.clientLeft}px`);
+      stage.style.setProperty("--composition-top", `${rect.top - parent.top - stage.clientTop}px`);
+      stage.style.setProperty("--composition-width", `${rect.width}px`);
+      stage.style.setProperty("--composition-height", `${rect.height}px`);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(element); observer.observe(stage); measure();
+    return () => observer.disconnect();
+  }, [fullscreenPreview, freehand]);
+  useEffect(() => {
     const handleFullscreen = () => {
       if (!document.fullscreenElement) setFullscreenPreview(false);
     };
@@ -1118,6 +1132,7 @@ export default function Editor({
               <BlurOverlay
                 region={(liveBlur ?? edit.blur)!}
                 active={blurSelected && !selectedTextId && !videoSelected}
+                onCancel={() => { liveBlurRef.current = null; setLiveBlur(null); }}
                 onGrab={() => { setBlurSelected(true); setSelectedTextId(null); setVideoSelected(false); }}
                 onDelete={() => {
                   liveBlurRef.current = null;
@@ -1356,6 +1371,8 @@ export default function Editor({
                       setSelectedTextId(null);
                     } else {
                       setTab(key);
+                      setBlurSelected(key === "blur");
+                      if (key === "blur") setVideoSelected(false);
                       setSheetOpen(true);
                       if (key !== "crop") exitFreehand();
                       if (key !== "text") {
@@ -1549,7 +1566,8 @@ export default function Editor({
                     </p>
                     <button
                       className="primary wide"
-                      onClick={() =>
+                      onClick={() => {
+                        setBlurSelected(true); setVideoSelected(false); setSelectedTextId(null);
                         change({
                           ...edit,
                           blur: {
@@ -1559,8 +1577,8 @@ export default function Editor({
                             height: 0.2,
                             intensity: 50,
                           },
-                        })
-                      }
+                        });
+                      }}
                     >
                       <Droplet size={15} /> Add blur box
                     </button>
@@ -2203,6 +2221,7 @@ const HANDLE_PX = 22;
 function BlurOverlay({
   region,
   active,
+  onCancel,
   onGrab,
   onDelete,
   onChange,
@@ -2210,6 +2229,7 @@ function BlurOverlay({
 }: {
   region: BlurRegion;
   active: boolean;
+  onCancel: () => void;
   onGrab: () => void;
   onDelete: () => void;
   onChange: (region: BlurRegion) => void;
@@ -2305,7 +2325,7 @@ function BlurOverlay({
   }
   function up(e: ReactPointerEvent) {
     if (drag.current?.pointerId !== e.pointerId) return;
-    if (e.type === "pointercancel") onChange(drag.current.start);
+    if (e.type === "pointercancel") onCancel();
     else if (drag.current.allowed && drag.current.moved) onCommit();
     else if (!drag.current.moved) onGrab();
     drag.current = null;

@@ -1,4 +1,5 @@
 import { cropGeometry } from "../shared/export.mjs";
+import { blurPixels } from "../shared/blur.mjs";
 import type { Edit, Overlay } from "./types";
 export const fonts = ["Inter", "DM Sans", "Montserrat", "Roboto"];
 export const textColors = [
@@ -228,18 +229,23 @@ export function blurRegion(
     sw = Math.min(width - sx, w + (x - sx) + pad),
     sh = Math.min(height - sy, h + (y - sy) + pad);
   if (sw <= 0 || sh <= 0) return;
-  const buffer = scratchCanvas(sw, sh);
+  // Bound processing cost on phones; the blurred image needs far fewer
+  // pixels than the source. This also works when Canvas filter is absent.
+  const reduction = Math.max(1, radius / 3);
+  const bw = Math.max(1, Math.ceil(sw / reduction)), bh = Math.max(1, Math.ceil(sh / reduction));
+  const buffer = scratchCanvas(bw, bh);
   const bctx = buffer.getContext("2d") as Context2D | null;
   if (!bctx) return;
-  bctx.clearRect(0, 0, sw, sh);
-  bctx.drawImage(ctx.canvas as CanvasImageSource, sx, sy, sw, sh, 0, 0, sw, sh);
+  bctx.drawImage(ctx.canvas as CanvasImageSource, sx, sy, sw, sh, 0, 0, bw, bh);
+  const pixels = bctx.getImageData(0, 0, bw, bh);
+  blurPixels(pixels.data, bw, bh, radius / reduction);
+  bctx.putImageData(pixels, 0, 0);
   ctx.save();
   ctx.beginPath();
   ctx.rect(x, y, w, h);
   ctx.clip();
-  ctx.filter = `blur(${radius}px)`;
-  ctx.drawImage(buffer as CanvasImageSource, sx, sy);
-  ctx.filter = "none";
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(buffer as CanvasImageSource, 0, 0, bw, bh, sx, sy, sw, sh);
   ctx.restore();
 }
 export function compose(

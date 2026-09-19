@@ -3025,3 +3025,17 @@ header {
 .blur-handle-tr::after { left: 0; bottom: 0; }
 .blur-handle-bl::after { right: 0; top: 0; }
 .blur-handle-br::after { left: 0; top: 0; }
+
+/* All composition hit targets share the actual rendered canvas rectangle,
+   including its responsive padding, rather than independently fitting 9:16. */
+.preview-stage .crop-pan-outer,
+.preview-stage .text-drag-frame,
+.preview-stage .blur-overlay,
+.preview-stage .preview-screen-controls {
+  inset: auto !important; margin: 0 !important;
+  left: var(--composition-left, 0px) !important;
+  top: var(--composition-top, 0px) !important;
+  width: var(--composition-width, 100%) !important;
+  height: var(--composition-height, 100%) !important;
+  max-width: none !important; max-height: none !important;
+}
