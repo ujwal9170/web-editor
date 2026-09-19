@@ -176,6 +176,12 @@ export function measureOverlay(
 // export frame.
 // Smallest blur box that's still grabbable by its handles on a phone.
 export const MIN_BLUR = 0.06;
+// Breadth goes much narrower than height: hiding a handle, a timestamp or a
+// watermark strip wants a thin vertical band, and 0.015 of 1080 is still 16
+// real pixels wide. It stays usable that narrow because the corner handles
+// step outside the box once it's thinner than they are (.blur-frame.narrow in
+// globals.css), instead of piling on top of each other.
+export const MIN_BLUR_WIDTH = 0.015;
 // Intensity is a 1-100 dial, not a pixel count: the same setting has to look
 // the same at 720p and 1080p, so it resolves against the canvas width rather
 // than being stored as pixels.

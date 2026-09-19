@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import Slider from "@/components/Slider";
 import CustomColor from "@/components/CustomColor";
@@ -31,6 +32,7 @@ import {
   LayoutTemplate,
   Minus,
   Droplet,
+  Copy,
 } from "lucide-react";
 // Only the editor's Text tab ever renders these -- loaded here instead of
 // the root layout so pages that never open the editor never pay for them.
@@ -48,6 +50,7 @@ import {
   clampCrop,
   MIN_CROP,
   MIN_BLUR,
+  MIN_BLUR_WIDTH,
   SAFE_ZONE,
   measureOverlay,
   type Crop as CropRect,
@@ -370,6 +373,45 @@ export default function Editor({
       ),
     });
   }
+  // The starting words are a suggestion, not content: the card opens with its
+  // field focused and the whole line selected, so one backspace clears it and
+  // typing replaces it outright -- nobody has to hold delete down first.
+  // The new card has to be rendered synchronously to be focused inside this
+  // tap: a focus() in a later task is a focus without user activation, and
+  // mobile browsers won't raise the keyboard for one.
+  function addOverlay() {
+    const id = crypto.randomUUID();
+    flushSync(() => {
+      change({
+        ...edit,
+        textOverlays: [
+          ...edit.textOverlays,
+          {
+            id,
+            text: "Make it yours.",
+            font: "Inter",
+            color: "#FFFFFF",
+            size: 56,
+            x: 0.5,
+            y: 0.5,
+            startMs: 0,
+            endMs: duration * 1000,
+          },
+        ],
+      });
+      setSelectedTextId(id);
+    });
+    const field = toolBody.current?.querySelector<HTMLTextAreaElement>(
+      `[data-overlay-card="${id}"] textarea`,
+    );
+    if (!field) return;
+    // preventScroll because the panel is scrolled deliberately just below:
+    // left to the browser, focus can scroll the whole workspace instead of
+    // only the list the card lives in.
+    field.focus({ preventScroll: true });
+    field.select();
+    revealOverlayCard(id);
+  }
   function removeOverlay(id: string) {
     endTextInput();
     change({
@@ -383,6 +425,9 @@ export default function Editor({
   // for the right one among several.
   function selectOverlay(id: string) {
     setSelectedTextId(id);
+    revealOverlayCard(id);
+  }
+  function revealOverlayCard(id: string) {
     requestAnimationFrame(() => {
       const panel = toolBody.current;
       const card = panel?.querySelector<HTMLElement>(`[data-overlay-card="${id}"]`);
@@ -1587,25 +1632,7 @@ export default function Editor({
                 <button
                   className="subtle wide"
                   disabled={edit.textOverlays.length >= 12}
-                  onClick={() =>
-                    change({
-                      ...edit,
-                      textOverlays: [
-                        ...edit.textOverlays,
-                        {
-                          id: crypto.randomUUID(),
-                          text: "Make it yours.",
-                          font: "Inter",
-                          color: "#FFFFFF",
-                          size: 56,
-                          x: 0.5,
-                          y: 0.5,
-                          startMs: 0,
-                          endMs: duration * 1000,
-                        },
-                      ],
-                    })
-                  }
+                  onClick={addOverlay}
                 >
                   <Plus size={16} /> Add text
                 </button>
@@ -1717,6 +1744,21 @@ export default function Editor({
                   Saved separately with your edited video, ready to copy into
                   Instagram.
                 </p>
+                {/* Above the field, not below it: copying is what you come
+                    back to this tab for once the caption is written, and a
+                    long caption pushed the button off the bottom of the
+                    sheet. */}
+                <button
+                  className="subtle wide"
+                  disabled={!caption.trim()}
+                  onClick={() =>
+                    navigator.clipboard
+                      .writeText(caption)
+                      .catch((e) => onError(e.message))
+                  }
+                >
+                  <Copy size={16} /> Copy caption
+                </button>
                 <textarea
                   aria-label="Post caption"
                   rows={12}
@@ -1725,16 +1767,6 @@ export default function Editor({
                   onChange={(e) => setCaption(e.target.value)}
                 />
                 <span className="hint">{caption.length} characters</span>
-                <button
-                  className="subtle wide"
-                  onClick={() =>
-                    navigator.clipboard
-                      .writeText(caption)
-                      .catch((e) => onError(e.message))
-                  }
-                >
-                  Copy caption
-                </button>
                 <div className="planned">
                   <strong>AI caption assistant</strong>
                   <p>
@@ -2095,6 +2127,10 @@ function CropOverlay({
     </div>
   );
 }
+// A corner handle's on-screen width (.blur-handle in globals.css). Two of
+// them side by side is the point below which they'd start covering each other
+// and the box has to be laid out differently.
+const HANDLE_PX = 22;
 // The blur rectangle, dragged and resized directly on the preview. Unlike
 // CropOverlay this sits on the 9:16 canvas box rather than the video's own
 // letterboxed rect, because the region is stored in canvas fractions.
@@ -2115,6 +2151,22 @@ function BlurOverlay({
 }) {
   const [snapped, setSnapped] = useState({ x: false, y: false });
   const box = useRef<HTMLDivElement>(null);
+  // How wide the box actually is on screen, so a band too thin to hold its
+  // own handles can be told apart from a normal box and styled for it. The
+  // letterbox is measured rather than assumed: it changes with the window,
+  // the sheet opening and the phone rotating.
+  const [letterboxWidth, setLetterboxWidth] = useState(0);
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setLetterboxWidth(entry.contentRect.width),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const narrow =
+    letterboxWidth > 0 && region.width * letterboxWidth < 2 * HANDLE_PX;
   const drag = useRef<{
     handle: DragHandle | "move";
     startX: number;
@@ -2163,10 +2215,10 @@ function BlurOverlay({
       // with it.
       if (d.handle.includes("l")) {
         const right = d.start.x + d.start.width;
-        x = Math.min(right - MIN_BLUR, Math.max(0, x + dx));
+        x = Math.min(right - MIN_BLUR_WIDTH, Math.max(0, x + dx));
         width = right - x;
       } else if (d.handle.includes("r"))
-        width = Math.min(1 - x, Math.max(MIN_BLUR, width + dx));
+        width = Math.min(1 - x, Math.max(MIN_BLUR_WIDTH, width + dx));
       if (d.handle.includes("t")) {
         const bottom = d.start.y + d.start.height;
         y = Math.min(bottom - MIN_BLUR, Math.max(0, y + dy));
@@ -2196,7 +2248,7 @@ function BlurOverlay({
         </>
       )}
       <div
-        className={`blur-frame${active ? "" : " dormant"}`}
+        className={`blur-frame${active ? "" : " dormant"}${narrow ? " narrow" : ""}`}
         style={{
           left: `${region.x * 100}%`,
           top: `${region.y * 100}%`,

@@ -1505,6 +1505,37 @@ header {
   right: -11px;
   cursor: nwse-resize;
 }
+/* A blur band narrow enough to hide just a handle or a timestamp is thinner
+   than its own handles, so centring them on the corners would stack them on
+   top of each other and leave only one side resizable. Below that width they
+   step fully outside the box instead -- still on their own corners, still
+   distinct targets -- and an invisible margin keeps the band itself wide
+   enough to pick up and move. */
+.blur-frame.narrow .blur-handle {
+  width: 16px;
+  height: 16px;
+}
+.blur-frame.narrow .blur-handle-tl,
+.blur-frame.narrow .blur-handle-bl {
+  left: -19px;
+}
+.blur-frame.narrow .blur-handle-tr,
+.blur-frame.narrow .blur-handle-br {
+  right: -19px;
+}
+.blur-frame.narrow .blur-handle-tl,
+.blur-frame.narrow .blur-handle-tr {
+  top: -8px;
+}
+.blur-frame.narrow .blur-handle-bl,
+.blur-frame.narrow .blur-handle-br {
+  bottom: -8px;
+}
+.blur-frame.narrow::before {
+  content: "";
+  position: absolute;
+  inset: 0 -12px;
+}
 /* Shown only while a text overlay is actively being dragged -- marks the
    band its box can never enter (TOP_SAFE_ZONE in Editor.tsx), not a
    permanent fixture cluttering the preview the rest of the time. */
