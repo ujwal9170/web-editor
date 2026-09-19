@@ -78,6 +78,12 @@ export default function Editor({
   onDelete?: () => void;
 }) {
   const editorRoot = useRef<HTMLElement>(null);
+  const toolBody = useRef<HTMLDivElement>(null);
+  function endTextInput() {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && editorRoot.current?.contains(active)) active.blur();
+    editorRoot.current?.classList.remove("keyboard-editing");
+  }
   useEditorViewport(editorRoot);
   const [edit, setEdit] = useState<Edit>(initial.edit),
     [name, setName] = useState(initial.name),
@@ -104,7 +110,6 @@ export default function Editor({
     [freehand, setFreehand] = useState(false),
     [liveCrop, setLiveCrop] = useState<CropRect | null>(null),
     [liveBlur, setLiveBlur] = useState<BlurRegion | null>(null),
-    [typing, setTyping] = useState(false),
     [liveTextPos, setLiveTextPos] = useState<{
       id: string;
       x: number;
@@ -206,6 +211,10 @@ export default function Editor({
       setDeviceSupported(deviceExportSupported()),
     );
   }, []);
+  useEffect(() => {
+    // Each tool starts at its own header, not the previous text card's scroll offset.
+    if (toolBody.current) toolBody.current.scrollTop = 0;
+  }, [tab, sheetOpen]);
   function change(next: Edit) {
     setPast((p) => [...p.slice(-59), edit]);
     setFuture([]);
@@ -226,6 +235,7 @@ export default function Editor({
   // freehand drag into a real change() before closing, so nothing dragged
   // right before closing is ever silently lost.
   function closeSheet() {
+    endTextInput();
     setSheetOpen(false);
     exitFreehand();
     setLiveTextPos(null);
@@ -302,6 +312,7 @@ export default function Editor({
     }
   }
   function toggleTemplateStrip() {
+    endTextInput();
     const next = !templateStripOpen;
     setTemplateStripOpen(next);
     if (!next) return;
@@ -360,6 +371,7 @@ export default function Editor({
     });
   }
   function removeOverlay(id: string) {
+    endTextInput();
     change({
       ...edit,
       textOverlays: edit.textOverlays.filter((t) => t.id !== id),
@@ -1180,7 +1192,7 @@ export default function Editor({
           </div>
         </div>
         <aside
-          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}${tab ? "" : " tool-idle"}${freehand ? " freehand-open" : ""}${typing ? " typing" : ""}`}
+          className={`inspector ${sheetOpen ? "sheet-open" : ""}${templateStripOpen ? " template-open" : ""}${tab ? "" : " tool-idle"}${freehand ? " freehand-open" : ""}`}
         >
           <div className="tool-tabs">
             {[
@@ -1210,6 +1222,7 @@ export default function Editor({
                   aria-label={`${label} tools`}
                   className={tab === key && !templateStripOpen ? "active" : ""}
                   onClick={() => {
+                    endTextInput();
                     // On mobile the same tab acts as a toggle for its sheet,
                     // which is how CapCut/InShot behave; on desktop the panel
                     // is always visible so this only ever switches tabs.
@@ -1236,7 +1249,7 @@ export default function Editor({
               ),
             )}
           </div>
-          <div className="tool-body">
+          <div className="tool-body" ref={toolBody}>
             <div className="sheet-header">
               <span className="sheet-grip" aria-hidden="true" />
               <button
@@ -1598,8 +1611,6 @@ export default function Editor({
                         rows={2}
                         maxLength={500}
                         value={t.text}
-                        onFocus={() => setTyping(true)}
-                        onBlur={() => setTyping(false)}
                         onChange={(e) =>
                           updateOverlay(t.id, { text: e.target.value })
                         }

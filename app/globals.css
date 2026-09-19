@@ -2558,19 +2558,18 @@ header {
      a full panel plus the keyboard left none of the video showing. While a
      text field has focus the sheet keeps just that field -- font, colour and
      the rest are still a tap away once the keyboard is down. */
-  .inspector.typing .tool-body {
+  .inspector:has(.text-card textarea:focus) .tool-body {
     height: auto;
   }
-  .inspector.typing .sheet-header,
-  .inspector.typing .tool-body > h2,
-  .inspector.typing .tool-body > button,
-  .inspector.typing .text-card:not(.selected),
-  .inspector.typing .text-card > label ~ label,
-  .inspector.typing .text-card > button,
-  .inspector.typing .text-card > div {
+  .inspector:has(.text-card textarea:focus) .tool-body > h2,
+  .inspector:has(.text-card textarea:focus) .tool-body > button,
+  .inspector:has(.text-card textarea:focus) .text-card:not(:focus-within),
+  .inspector:has(.text-card textarea:focus) .text-card > label ~ label,
+  .inspector:has(.text-card textarea:focus) .text-card > button,
+  .inspector:has(.text-card textarea:focus) .text-card > div {
     display: none;
   }
-  .inspector.typing .text-card textarea {
+  .inspector:has(.text-card textarea:focus) .text-card textarea {
     min-height: 44px;
     height: 44px;
   }
@@ -2841,7 +2840,7 @@ header {
     height: 150px;
     max-height: 48%;
   }
-  .editor.keyboard-editing .inspector.typing .tool-body { height: 120px; }
-  .editor.keyboard-editing .inspector.typing .text-card { margin: 0; padding: 8px; }
-  .editor.keyboard-editing .inspector.typing textarea { height: 64px; min-height: 64px; }
+  .editor.keyboard-editing .inspector:has(.text-card textarea:focus) .tool-body { height: 170px; }
+  .editor.keyboard-editing .inspector:has(.text-card textarea:focus) .text-card { margin: 0; padding: 8px; }
+  .editor.keyboard-editing .inspector:has(.text-card textarea:focus) textarea { height: 64px; min-height: 64px; }
 }
