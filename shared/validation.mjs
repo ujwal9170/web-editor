@@ -1,10 +1,16 @@
 import { z } from "zod";
 export const color = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+// A text colour is checked against this list, not just against a hex pattern,
+// so it has to carry every swatch the editor offers (lib/canvas.ts) -- a
+// colour missing here is a swatch that saves fine on screen and is rejected
+// by the server.
 export const textColors = [
   "#FFFFFF",
   "#111827",
   "#FF4D6D",
   "#FACC15",
+  "#FFD700",
+  "#FFBF00",
   "#38BDF8",
 ];
 export const fonts = ["Inter", "DM Sans", "Montserrat", "Roboto"];

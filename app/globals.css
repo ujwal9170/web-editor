@@ -1939,6 +1939,10 @@ header {
 }
 .swatches {
   display: flex;
+  /* Wraps because the row grows with the palette: seven 40px swatches and
+     their gaps are wider than a phone's panel, and a swatch pushed off the
+     edge of a row that cannot scroll is a colour nobody can pick. */
+  flex-wrap: wrap;
   gap: 10px;
   margin: 14px 0 20px;
 }

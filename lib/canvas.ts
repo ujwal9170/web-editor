@@ -2,14 +2,25 @@ import { cropGeometry } from "../shared/export.mjs";
 import { blurPixels } from "../shared/blur.mjs";
 import type { Edit, Overlay } from "./types";
 export const fonts = ["Inter", "DM Sans", "Montserrat", "Roboto"];
+// Kept in step with the same list in shared/validation.mjs, which is what
+// actually decides whether a saved overlay is accepted.
 export const textColors = [
   "#FFFFFF",
   "#111827",
   "#FF4D6D",
   "#FACC15",
+  "#FFD700",
+  "#FFBF00",
   "#38BDF8",
 ];
-export const bgColors = ["#111827", "#FFFFFF", "#7C3AED", "#FF4D6D", "#38BDF8"];
+export const bgColors = [
+  "#111827",
+  "#FFFFFF",
+  "#7C3AED",
+  "#FF4D6D",
+  "#38BDF8",
+  "#C8A77D",
+];
 export function dimensions(
   ratio: string,
   quality: "1080p" | "720p" = "1080p",
