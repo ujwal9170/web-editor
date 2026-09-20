@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createExportQueue } from "../lib/exportQueue.mjs";
-import { cropGeometry, exportTimeline, frameTimes } from "../shared/export.mjs";
+import {
+  cropGeometry,
+  exportTimeline,
+  frameTimes,
+  pcmSpans,
+} from "../shared/export.mjs";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 // The export worker no longer hands a crop rectangle to the decoder: it
 // decodes a whole aspect-preserving frame and crops THAT. So the geometry
@@ -118,6 +123,51 @@ test("cuts share one output frame grid and never include the removed middle", ()
   assert.equal(times.length, 120);
   assert.equal(times[60].sourceTime, 4);
   assert.ok(times.every((t) => t.sourceTime < 2 || t.sourceTime >= 4));
+});
+
+test("page-decoded audio follows the same cuts as the picture", () => {
+  // The fallback path taken when a browser's own audio decoder refuses the
+  // clip: whole-track PCM, read back range by range.
+  const rate = 48000;
+  const { ranges, duration } = exportTimeline([
+    { startMs: 0, endMs: 2000, enabled: true },
+    { startMs: 2000, endMs: 4000, enabled: false },
+    { startMs: 4000, endMs: 6000, enabled: true },
+  ]);
+  const spans = pcmSpans(ranges, rate, 6 * rate, rate / 2);
+  const frames = spans.reduce((sum, s) => sum + s.count, 0);
+  assert.equal(frames, duration * rate);
+  // Nothing is read out of the removed middle, and nothing past the source.
+  assert.ok(
+    spans.every(
+      (s) =>
+        s.offset + s.count <= 6 * rate &&
+        (s.offset + s.count <= 2 * rate || s.offset >= 4 * rate),
+    ),
+  );
+  // The second kept range starts where the first one ended on the output
+  // timeline, not where it sat in the source.
+  assert.equal(spans[0].timestamp, 0);
+  assert.equal(spans.find((s) => s.offset === 4 * rate).timestamp, 2);
+  // Each block is written exactly where the one before it ended.
+  let at = 0;
+  for (const span of spans) {
+    assert.ok(Math.abs(span.timestamp - at) < 1e-9);
+    at += span.count / rate;
+  }
+  assert.equal(at, duration);
+});
+test("a source shorter than its cuts claim is read only as far as it goes", () => {
+  const rate = 44100;
+  const { ranges } = exportTimeline([
+    { startMs: 0, endMs: 4000, enabled: true },
+  ]);
+  const spans = pcmSpans(ranges, rate, 2 * rate, rate);
+  assert.equal(
+    spans.reduce((sum, s) => sum + s.count, 0),
+    2 * rate,
+  );
+  assert.ok(spans.every((s) => s.offset + s.count <= 2 * rate));
 });
 
 test("exports use immutable snapshots and execute strictly serially", async () => {

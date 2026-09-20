@@ -19,14 +19,19 @@ import {
   exportProfile,
   exportTimeline,
   frameTimes,
+  pcmSpans,
+  AUDIO_DECODE_FAILED,
 } from "../shared/export.mjs";
 import { blurRegion } from "./canvas";
-import type { RenderRequest, RenderArtwork } from "./deviceExport";
+import type { RenderRequest, RenderArtwork, PcmAudio } from "./deviceExport";
 
 // Dedicated worker: UI stays responsive and cancellation destroys decoders/encoders.
 self.onmessage = async ({
   data,
 }: MessageEvent<RenderRequest & { artwork: RenderArtwork }>) => {
+  // The page answers a request for decoded audio on this same port (see
+  // requestPcm below); those replies are not new jobs.
+  if (!data?.artwork) return;
   const started = performance.now();
   const inputs: Input[] = [];
   let output: Output | undefined;
@@ -42,6 +47,21 @@ self.onmessage = async ({
       fps: frames ? frames / ((now - started) / 1000) : undefined,
     });
   };
+  // Asks the page to decode the whole audio track with decodeAudioData and
+  // send the samples back. The page's media stack is not the same decoder as
+  // WebCodecs: on iOS it reads codecs WebCodecs refuses outright.
+  function requestPcm() {
+    return new Promise<PcmAudio>((resolve, reject) => {
+      const reply = ({ data: message }: MessageEvent) => {
+        if (!message || (!message.pcm && !message.pcmError)) return;
+        self.removeEventListener("message", reply);
+        if (message.pcmError) reject(new Error(message.pcmError));
+        else resolve(message.pcm);
+      };
+      self.addEventListener("message", reply);
+      self.postMessage({ needPcm: true });
+    });
+  }
   function input(url: string) {
     const file = new Input({
       formats: ALL_FORMATS,
@@ -127,6 +147,36 @@ self.onmessage = async ({
       throw new Error(
         "AAC audio export is unavailable in this browser. Try an updated Safari/iOS or another supported browser; audio will not be silently removed.",
       );
+    // Being able to configure a decoder is not the same as being able to use
+    // one. iOS Safari accepts an HE-AAC config -- what a low-bitrate reel
+    // download often carries -- and then fails part way through the export
+    // with "InternalAudioDecoderCocoa decoding failed", while the same file
+    // exports fine on a laptop. Find that out here, on a fifth of a second of
+    // audio, instead of minutes into a render: the page can decode the track
+    // with decodeAudioData (a different decoder entirely, one that does read
+    // HE-AAC) and send back PCM that goes straight to the encoder.
+    let pcm: PcmAudio | null = data.pcm ?? null;
+    if (audioTrack && !pcm) {
+      const track = audioTrack;
+      const usable = await (async () => {
+        try {
+          for await (const sample of new AudioSampleSink(track).samples(
+            0,
+            Math.min(0.2, duration),
+          )) {
+            sample.close();
+            break;
+          }
+          return true;
+        } catch {
+          return false;
+        }
+      })();
+      if (!usable) {
+        progress("Reading this clip's audio…", 0, 0, true);
+        pcm = await requestPcm();
+      }
+    }
 
     // Encoding a 24 or 25fps clip at 30 spends a fifth of every second on
     // frames that are copies of the one before -- bytes that buy nothing,
@@ -251,9 +301,55 @@ self.onmessage = async ({
       }
       videoSource.close();
     }
+    // Same cuts, same output timestamps, but read from one buffer the page
+    // decoded rather than from a decoder running here.
+    async function audioFromPcm(track: PcmAudio) {
+      const channels = Math.max(1, track.numberOfChannels),
+        rate = track.sampleRate,
+        total = Math.floor(track.data.length / channels);
+      for (const span of pcmSpans(
+        ranges,
+        rate,
+        total,
+        Math.max(1, Math.round(rate * 0.5)),
+      )) {
+        const sample = new AudioSample({
+          data: track.data.subarray(
+            span.offset * channels,
+            (span.offset + span.count) * channels,
+          ),
+          format: "f32",
+          numberOfChannels: channels,
+          sampleRate: rate,
+          timestamp: span.timestamp,
+        });
+        try {
+          await audioSource!.add(sample);
+        } finally {
+          sample.close();
+        }
+      }
+    }
     async function audio() {
       if (!audioTrack || !audioSource) return;
-      const audioSink = new AudioSampleSink(audioTrack);
+      if (pcm) {
+        await audioFromPcm(pcm);
+        audioSource.close();
+        return;
+      }
+      try {
+        await decodeAudio(new AudioSampleSink(audioTrack));
+      } catch (e) {
+        // A decoder that passed the probe and died later: tag it, so the page
+        // knows this is the one failure worth retrying its own way instead of
+        // showing the user a Cocoa error string and stopping.
+        throw new Error(
+          `${AUDIO_DECODE_FAILED}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      audioSource.close();
+    }
+    async function decodeAudio(audioSink: AudioSampleSink) {
       for (const range of ranges) {
         for await (const sample of audioSink.samples(range.start, range.end)) {
           let clipped: AudioSample | undefined;
@@ -274,14 +370,13 @@ self.onmessage = async ({
                 range.outputStart + clipped.timestamp - range.start,
               ),
             );
-            await audioSource.add(clipped);
+            await audioSource!.add(clipped);
           } finally {
             clipped?.close();
             sample.close();
           }
         }
       }
-      audioSource.close();
     }
     progress("Rendering on this device…", 0, 0, true);
     await Promise.all([video(), audio()]);

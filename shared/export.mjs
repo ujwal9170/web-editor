@@ -1,4 +1,9 @@
 // Export resolution is independent of the edit's canonical 1080-wide canvas.
+// Marks the one failure the page can do something about rather than report:
+// this browser's WebCodecs audio decoder refused the clip, so the page decodes
+// the track itself and hands the export raw PCM instead. Matched as a
+// substring of the worker's error, so it has to be distinctive.
+export const AUDIO_DECODE_FAILED = "AUDIO_DECODE_FAILED";
 export function exportProfile(resolution = 720) {
   if (![720, 1080].includes(resolution))
     throw new Error("Choose 720p or 1080p.");
@@ -51,6 +56,27 @@ export function exportTimeline(segments) {
       return range;
     });
   return { ranges, duration };
+}
+
+// Where each block of page-decoded PCM lands on the export timeline, when the
+// browser's own audio decoder was no use (see AUDIO_DECODE_FAILED). Same cuts
+// the video follows: each kept range is read from its own place in the source
+// buffer and written at its place in the output, so a removed middle is
+// removed from the audio too. Kept here rather than in the worker so the cut
+// maths can be checked without a browser.
+export function pcmSpans(ranges, sampleRate, totalFrames, chunkFrames) {
+  const spans = [];
+  for (const range of ranges) {
+    const first = Math.min(totalFrames, Math.max(0, Math.round(range.start * sampleRate))),
+      last = Math.min(totalFrames, Math.max(first, Math.round(range.end * sampleRate)));
+    for (let at = first; at < last; at += chunkFrames)
+      spans.push({
+        offset: at,
+        count: Math.min(chunkFrames, last - at),
+        timestamp: range.outputStart + (at - first) / sampleRate,
+      });
+  }
+  return spans;
 }
 
 // A single output frame grid avoids accumulating rounding errors at cuts.

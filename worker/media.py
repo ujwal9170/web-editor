@@ -36,6 +36,14 @@ def probe(file):
         raise ValueError('Videos must be between 0 and 15 minutes.')
     return {'duration': seconds, 'width': int(size[1]) if size else 0, 'height': int(size[2]) if size else 0, 'hasAudio': 'Audio:' in text,
             'h264': bool(re.search(r'Video: h264\b', video)), 'aac': bool(re.search(r'Audio: aac\b', text)),
+            # AAC is a family, and only the Low Complexity profile is safe to
+            # hand a browser: iOS Safari's WebCodecs decoder accepts an HE-AAC
+            # config and then fails mid-decode ("InternalAudioDecoderCocoa
+            # decoding failed"), which is how a clip that exported fine on a
+            # laptop died on a phone. ffmpeg prints the profile in parentheses
+            # ("Audio: aac (LC)", "Audio: aac (HE-AAC)"); anything it does not
+            # name LC is re-encoded rather than trusted.
+            'aacLc': bool(re.search(r'Audio: aac \(LC\)', text)),
             'mp4': bool(re.search(r'Input #0, [^\n]*mp4', text))}
 
 
@@ -52,19 +60,21 @@ def normalize(source, target, info=None):
     # produce a slightly worse copy of what we already had. When the source
     # already satisfies everything the editor needs, remux instead -- same
     # container work, no pixels touched, seconds instead of minutes. Anything
-    # that doesn't qualify (odd dimensions, VP9/AV1, Opus audio) still takes
-    # the full encode below, and so does a remux that fails to verify.
+    # that doesn't qualify (odd dimensions, VP9/AV1) still takes the full
+    # encode below, and so does a remux that fails to verify. Audio no longer
+    # decides this: a track that isn't plain AAC-LC is re-encoded on its own,
+    # seconds of work, while the video -- the expensive part -- is still
+    # copied untouched.
     if (
         info['mp4'] and info['h264']
         and info['width'] % 2 == 0 and info['height'] % 2 == 0
-        and (info['aac'] or not info['hasAudio'])
     ):
         copy = ['-i', str(source)]
         if not info['hasAudio']:
             copy += ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-shortest']
         copy += ['-map', '0:v:0', '-map', '0:a:0' if info['hasAudio'] else '1:a:0',
                  '-t', str(info['duration']), '-c:v', 'copy']
-        copy += (['-c:a', 'copy'] if info['hasAudio']
+        copy += (['-c:a', 'copy'] if info['hasAudio'] and info['aacLc']
                  else ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2'])
         copy += ['-movflags', '+faststart', str(target)]
         try:
