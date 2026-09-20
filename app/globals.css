@@ -1956,6 +1956,16 @@ header {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+/* A switch, not a command: it has to read as on or off at a glance, which a
+   plain .subtle button does not. */
+.bold-toggle {
+  font-weight: 700;
+}
+.bold-toggle.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #c5ff5f1a;
+}
 .queue-dismiss { position: absolute; top: 8px; right: 8px; min-height: 44px; min-width: 44px; }
 .device-export-queue > .subtle { max-width: calc(100% - 44px); }
 .custom-color-field { margin: 16px 0; }

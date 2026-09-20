@@ -1,4 +1,4 @@
-import { background, text, drawnBounds } from "./canvas";
+import { background, text, drawnBounds, fontStyle } from "./canvas";
 import { exportProfile, AUDIO_DECODE_FAILED } from "../shared/export.mjs";
 import type { Edit } from "./types";
 
@@ -106,7 +106,7 @@ export async function renderOnDevice(
   // Load the exact font weights before rasterizing; fonts are never redrawn per frame.
   await Promise.all(
     request.edit.textOverlays.map((t) =>
-      document.fonts.load(`700 ${t.size}px "${t.font}"`, t.text || "A"),
+      document.fonts.load(fontStyle(t, t.size), t.text || "A"),
     ),
   );
   await document.fonts.ready;

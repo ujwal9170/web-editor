@@ -14,17 +14,17 @@ importers:
       '@fastify/static':
         specifier: ^8.0.0
         version: 8.3.0
-      '@fontsource/dm-sans':
-        specifier: ^5.2.0
-        version: 5.3.0
       '@fontsource/inter':
         specifier: ^5.2.0
         version: 5.3.0
-      '@fontsource/montserrat':
-        specifier: ^5.2.0
+      '@fontsource/open-sans':
+        specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource/roboto':
-        specifier: ^5.2.0
+      '@fontsource/rubik':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/zilla-slab':
+        specifier: ^5.3.0
         version: 5.3.0
       fastify:
         specifier: ^5.0.0
@@ -108,17 +108,17 @@ packages:
   '@fastify/static@8.3.0':
     resolution: {integrity: sha512-yKxviR5PH1OKNnisIzZKmgZSus0r2OZb8qCSbqmw34aolT4g3UlzYfeBRym+HJ1J471CR8e2ldNub4PubD1coA==}
 
-  '@fontsource/dm-sans@5.3.0':
-    resolution: {integrity: sha512-lYJtMXXO28q1z+yz+z8XKd0s4hXaa9QdkETzkyD760sidCv5heI86weYA0sx0Nc4pAMAQTUuyf4gO44cYKKS9g==}
-
   '@fontsource/inter@5.3.0':
     resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
 
-  '@fontsource/montserrat@5.3.0':
-    resolution: {integrity: sha512-iQPDtZOnmM5ih4JBGaMSXisRap0ixb9bAUw2hDtY7EjVfaqiiNlKtVuJl9XclxUwtwMMHNcWXfQR6zI9x05+Tg==}
+  '@fontsource/open-sans@5.3.0':
+    resolution: {integrity: sha512-V1bdMlGNyZrJwzrdusshMOw2YR0aqYDL7kOo9dkxUEKl8dFv66A9HLckOOXl572sG/7ohhDQrCrTFGSn9LZcSw==}
 
-  '@fontsource/roboto@5.3.0':
-    resolution: {integrity: sha512-BapRJOWYP+LZ21zp+wBQjfpPYKRoxc4LspJ/RLuI+HSMBD5u/X4O+ESDrSvEqDSy0rAl7GwBJ+09mdc16cVQ1Q==}
+  '@fontsource/rubik@5.3.0':
+    resolution: {integrity: sha512-Nks2mn7vlE1jZVHuVgoKU2Ejqjvd+GJzLRdraCjo1xc79oo7O6vJ8pcvSfmKPGX3/Ln7nt09XWFzPeu2jWf0xQ==}
+
+  '@fontsource/zilla-slab@5.3.0':
+    resolution: {integrity: sha512-xbdDx5OESJDQqp3GIp4pjBgI+qpcg4AxnHLN15ekfJbG+ZYaOXg3uBjDpYlkuPQpey91afxHBNaqZgzluJ2FWA==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -832,13 +832,13 @@ snapshots:
       fastq: 1.20.3
       glob: 11.1.0
 
-  '@fontsource/dm-sans@5.3.0': {}
-
   '@fontsource/inter@5.3.0': {}
 
-  '@fontsource/montserrat@5.3.0': {}
+  '@fontsource/open-sans@5.3.0': {}
 
-  '@fontsource/roboto@5.3.0': {}
+  '@fontsource/rubik@5.3.0': {}
+
+  '@fontsource/zilla-slab@5.3.0': {}
 
   '@img/colour@1.1.0':
     optional: true

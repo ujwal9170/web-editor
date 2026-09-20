@@ -177,6 +177,43 @@ test("a blur covers the whole clip and outlives a swap to a shorter one", () => 
   };
   assert.deepEqual(validateEdit(swapped, 2000).blur, region);
 });
+test("an edit written with a font that no longer exists still opens", () => {
+  // The Text tab dropped DM Sans, Montserrat and Roboto. A project saved with
+  // one of them has to keep working -- rejecting it would lock the owner out
+  // of their own edit -- so the font falls back instead.
+  const base = initialEdit(10000);
+  const overlay = {
+    id: "old",
+    text: "Saved last week",
+    font: "Montserrat",
+    color: "#FFFFFF",
+    size: 56,
+    x: 0.5,
+    y: 0.5,
+    startMs: 0,
+    endMs: 10000,
+  };
+  const checked = validateEdit({ ...base, textOverlays: [overlay] }, 10000);
+  assert.equal(checked.textOverlays[0].font, "Inter");
+  // Nothing else about it is touched, and it keeps the weight it was drawn at
+  // back when every overlay was bold.
+  assert.equal(checked.textOverlays[0].text, "Saved last week");
+  assert.equal(checked.textOverlays[0].bold, true);
+  // A font that is still offered survives as itself, and Bold is remembered
+  // in both positions.
+  for (const [font, bold] of [
+    ["Zilla Slab", false],
+    ["Inter Medium", true],
+    ["Rubik", false],
+  ]) {
+    const result = validateEdit(
+      { ...base, textOverlays: [{ ...overlay, font, bold }] },
+      10000,
+    );
+    assert.equal(result.textOverlays[0].font, font);
+    assert.equal(result.textOverlays[0].bold, bold);
+  }
+});
 test("edit validation rejects out-of-bounds crops, overlaps and an empty timeline", () => {
   const edit = initialEdit(10000);
   assert.deepEqual(validateEdit(edit, 10000), edit);

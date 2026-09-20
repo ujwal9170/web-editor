@@ -33,14 +33,22 @@ import {
   Minus,
   Droplet,
   Copy,
+  Bold,
   Maximize2,
   Minimize2,
 } from "lucide-react";
 // Only the editor's Text tab ever renders these -- loaded here instead of
 // the root layout so pages that never open the editor never pay for them.
-import "@fontsource/dm-sans/700.css";
-import "@fontsource/montserrat/700.css";
-import "@fontsource/roboto/700.css";
+// Both weights of each: the Bold switch picks 700, off picks the face's own
+// weight (see fontFaces in lib/canvas.ts). Inter's own weights come from the
+// root layout, except the 500 that "Inter Medium" is.
+import "@fontsource/inter/500.css";
+import "@fontsource/open-sans/400.css";
+import "@fontsource/open-sans/700.css";
+import "@fontsource/rubik/400.css";
+import "@fontsource/rubik/700.css";
+import "@fontsource/zilla-slab/400.css";
+import "@fontsource/zilla-slab/700.css";
 import { api, fileUrl, clock, awaitJob, LAST_TEMPLATE_KEY } from "@/lib/api";
 import { cropGeometry } from "@/shared/export.mjs";
 import {
@@ -422,6 +430,7 @@ export default function Editor({
             id,
             text: "Make it yours.",
             font: "Inter",
+            bold: true,
             color: "#FFFFFF",
             size: 56,
             x: 0.5,
@@ -1751,6 +1760,15 @@ export default function Editor({
                         ))}
                       </select>
                     </label>
+                    <button
+                      className={`subtle bold-toggle${t.bold ?? true ? " selected" : ""}`}
+                      aria-pressed={t.bold ?? true}
+                      onClick={() =>
+                        updateOverlay(t.id, { bold: !(t.bold ?? true) })
+                      }
+                    >
+                      <Bold size={15} /> Bold
+                    </button>
                     <div className="swatches">
                       {textColors.map((c) => (
                         <button

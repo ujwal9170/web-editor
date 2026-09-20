@@ -17,6 +17,9 @@ export type Overlay = {
   id: string;
   text: string;
   font: string;
+  // Separate from the font: every face can be drawn at its own weight or at
+  // 700. Optional only for edits written before the switch existed.
+  bold?: boolean;
   color: string;
   size: number;
   x: number;

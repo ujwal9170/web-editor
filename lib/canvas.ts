@@ -1,7 +1,31 @@
 import { cropGeometry } from "../shared/export.mjs";
 import { blurPixels } from "../shared/blur.mjs";
 import type { Edit, Overlay } from "./types";
-export const fonts = ["Inter", "DM Sans", "Montserrat", "Roboto"];
+// Every face the Text tab offers, with the weight it draws at when Bold is
+// off. Bold is a separate switch, so "Inter Medium" is not a weight choice
+// that Bold then contradicts -- it is the face's own weight, and Bold takes
+// any of them to 700. Zilla Slab stands in for Rockwell Bold Condensed, which
+// is Monotype's and cannot be shipped with a web page.
+// Kept in step with the list in shared/validation.mjs, which is what decides
+// whether a saved overlay is accepted.
+export const fontFaces: Record<string, { family: string; weight: number }> = {
+  Inter: { family: "Inter", weight: 400 },
+  "Inter Medium": { family: "Inter", weight: 500 },
+  "Open Sans": { family: "Open Sans", weight: 400 },
+  Rubik: { family: "Rubik", weight: 400 },
+  "Zilla Slab": { family: "Zilla Slab", weight: 400 },
+};
+export const fonts = Object.keys(fontFaces);
+// The one place a font string is built, so the preview, the drag handle's
+// measurement, the font preload and the export can never disagree about
+// which face is being drawn.
+export function fontStyle(
+  t: { font: string; bold?: boolean },
+  sizePx: number,
+) {
+  const face = fontFaces[t.font] ?? fontFaces.Inter;
+  return `${(t.bold ?? true) ? 700 : face.weight} ${sizePx}px "${face.family}"`;
+}
 // Kept in step with the same list in shared/validation.mjs, which is what
 // actually decides whether a saved overlay is accepted.
 export const textColors = [
@@ -142,7 +166,7 @@ function fitText(ctx: Context2D, t: Overlay, width: number) {
   const scale = width / 1080;
   const maxWidth = width * (1 - SAFE_ZONE.left - SAFE_ZONE.right);
   let fontSize = t.size * scale;
-  ctx.font = `700 ${fontSize}px "${t.font}"`;
+  ctx.font = fontStyle(t, fontSize);
   // Long text now runs onto another line at the safe edge instead of the
   // whole block shrinking to fit on one -- typing a longer caption should
   // cost a line, not the size of every word already there.

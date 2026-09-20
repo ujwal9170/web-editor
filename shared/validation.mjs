@@ -13,7 +13,16 @@ export const textColors = [
   "#FFBF00",
   "#38BDF8",
 ];
-export const fonts = ["Inter", "DM Sans", "Montserrat", "Roboto"];
+// Matches fontFaces in lib/canvas.ts. Falls back rather than rejecting: the
+// three fonts this list used to carry are gone, and an edit saved with one of
+// them has to keep opening -- it just draws in Inter now.
+export const fonts = [
+  "Inter",
+  "Inter Medium",
+  "Open Sans",
+  "Rubik",
+  "Zilla Slab",
+];
 const unit = z.number().finite().min(0).max(1);
 export const editSchema = z.object({
   version: z.literal(1),
@@ -63,7 +72,11 @@ export const editSchema = z.object({
       z.object({
         id: z.string().max(80),
         text: z.string().max(500),
-        font: z.enum(fonts),
+        font: z.enum(fonts).catch("Inter"),
+        // Its own switch rather than a weight baked into the font choice.
+        // Defaulted to true so every overlay written before this existed keeps
+        // the weight it was drawn at.
+        bold: z.boolean().default(true),
         color: z.enum(textColors),
         size: z.number().min(16).max(120),
         x: unit,
