@@ -2,13 +2,15 @@ import Fastify from "fastify";
 import multipart from "@fastify/multipart";
 import staticPlugin from "@fastify/static";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import { createRepository } from "./repository.mjs";
 import { createQueue } from "./jobs.mjs";
+import { createStorage } from "./storage.mjs";
+import { checkAudioAssets } from "./audio-assets.mjs";
 import {
   MEMBER,
   admins,
@@ -32,11 +34,15 @@ export async function createApp({
   dataDir = process.env.DATA_DIR || "runtime",
   logger = false,
   queueFactory = createQueue,
+  // Where the installed vocal-removal assets live. Only tests point this
+  // anywhere other than the checkout the server was started from.
+  projectRoot = process.cwd(),
 } = {}) {
   const root = path.resolve(dataDir);
   await mkdir(root, { recursive: true });
   const repo = createRepository(root),
-    queue = queueFactory(repo, root);
+    queue = queueFactory(repo, root),
+    storage = createStorage(root);
   for (const kind of ["media", "project", "export"]) {
     for (const item of repo.list(kind)) {
       const name = cleanVideoName(item.name);
@@ -69,13 +75,24 @@ export async function createApp({
     }
   }
   const app = Fastify({ logger, bodyLimit: 24 * 1024 * 1024 });
-  const ttl =
-    Math.max(1, Number(process.env.SOURCE_RETENTION_DAYS) || 7) * 86400_000;
-  // One-time migration: exports made before auto-expiry existed get a fresh
-  // retention window starting now, rather than being exempt forever.
-  for (const item of repo.list("export"))
-    if (!item.expiresAt)
-      repo.put("export", { ...item, expiresAt: Date.now() + ttl });
+  // Strict, fixed retention. A source is deleted this long after it was
+  // imported and an export this long after it was saved -- the deadline is set
+  // once, at creation, and nothing that happens afterwards (opening the
+  // project, exporting from it again) moves it.
+  const retentionHours = Math.min(
+    24 * 30,
+    Math.max(1, Number(process.env.SOURCE_RETENTION_HOURS) || 36),
+  );
+  const ttl = retentionHours * 3600_000;
+  const expiryOf = (item) => (item.createdAt ?? Date.now()) + ttl;
+  // Records written under the older refreshable policy are re-clamped to that
+  // window on startup, so one deploy doesn't leave two retention rules
+  // running side by side.
+  for (const kind of ["media", "export"])
+    for (const item of repo.list(kind)) {
+      const due = expiryOf(item);
+      if (item.expiresAt !== due) repo.put(kind, { ...item, expiresAt: due });
+    }
   const sessions = new Map(),
     attempts = new Map();
   let authenticating = 0;
@@ -197,6 +214,33 @@ export async function createApp({
     phase: "development",
     storage: "sqlite-local",
   }));
+  // Vocal removal depends on two large files that are installed, not
+  // committed. Checking them here -- rather than letting the browser discover
+  // a 404 halfway through a separation -- is what lets the editor's buttons
+  // say "unavailable" up front. Cached: it stats the same files for every
+  // editor that opens the Audio tab.
+  let audioCheck = { at: 0, value: null };
+  function audioModel() {
+    if (!audioCheck.value || Date.now() - audioCheck.at > 60_000)
+      audioCheck = { at: Date.now(), value: checkAudioAssets(projectRoot) };
+    return audioCheck.value;
+  }
+  if (!audioModel().available) console.warn(`[audio] ${audioModel().detail}`);
+  app.get("/api/audio-model", () => audioModel());
+  // What the workspace is currently allowed to hold, and how close it is to
+  // the edge. The browser polls this to warn before an import is refused.
+  app.get("/api/limits", async () => ({
+    retentionHours,
+    storage: await storage.status(),
+  }));
+  // Refuse a new import while the disk is nearly full rather than failing
+  // halfway through writing it. Finishing existing work -- accepting an
+  // export a browser has already rendered -- is never blocked this way.
+  async function requireRoom() {
+    const state = await storage.status();
+    if (state.level === "full")
+      throw Object.assign(new Error(state.message), { statusCode: 507 });
+  }
   const cookieFlags = `HttpOnly; SameSite=Strict; Path=/${
     process.env.PUBLIC_ORIGIN?.startsWith("https:") ? "; Secure" : ""
   }`;
@@ -366,8 +410,21 @@ export async function createApp({
     return { ok: true, username: target.username, removedRecords: removed };
   });
   app.get("/api/media", (req) => mine("media", req));
-  app.get("/api/jobs", (req) => mine("job", req).slice(0, 30));
-  app.get("/api/jobs/:id", (req) => get("job", req.params.id, req));
+  // Jobs carry their place in the server-wide line, so a waiting import can
+  // say "3rd in the queue" instead of sitting at 0% with no explanation.
+  function withQueue(job) {
+    const stats = queue.stats?.() ?? { limit: 1, running: 0, waiting: 0 };
+    return {
+      ...job,
+      queuePosition:
+        job.status === "queued" ? (queue.position?.(job.id) ?? 0) : 0,
+      queueRunning: stats.running,
+      queueWaiting: stats.waiting,
+      queueLimit: stats.limit,
+    };
+  }
+  app.get("/api/jobs", (req) => mine("job", req).slice(0, 30).map(withQueue));
+  app.get("/api/jobs/:id", (req) => withQueue(get("job", req.params.id, req)));
   app.get("/api/projects", (req) => mine("project", req));
   app.get("/api/exports", (req) => mine("export", req));
   async function upload(req, extension) {
@@ -394,7 +451,7 @@ export async function createApp({
           ...item,
           ...result,
           status: "ready",
-          expiresAt: Date.now() + ttl,
+          expiresAt: expiryOf(item),
         });
         return item.id;
       },
@@ -406,6 +463,7 @@ export async function createApp({
     );
   }
   app.post("/api/media/uploads", async (req, reply) => {
+    await requireRoom();
     const file = await upload(req, ".upload");
     const media = repo.put("media", {
       userId: req.userId,
@@ -415,9 +473,9 @@ export async function createApp({
       status: "processing",
     });
     const job = importJob(media, { action: "import", input: file.name });
-    return reply.code(202).send({ job, media });
+    return reply.code(202).send({ job: withQueue(job), media });
   });
-  app.post("/api/downloads", (req, reply) => {
+  app.post("/api/downloads", async (req, reply) => {
     const { url, source, label } = videoLink(req.body?.url);
     if (req.body?.confirmed !== true)
       throw new Error("Confirm permission to use this video.");
@@ -426,6 +484,7 @@ export async function createApp({
         .length >= 10
     )
       return reply.code(429).send({ error: "Queue is full. Please wait." });
+    await requireRoom();
     const media = repo.put("media", {
       userId: req.userId,
       name: `${label} video`,
@@ -435,7 +494,7 @@ export async function createApp({
       status: "processing",
     });
     const job = importJob(media, { action: "download", url, platform: source });
-    return reply.code(202).send({ job, media });
+    return reply.code(202).send({ job: withQueue(job), media });
   });
   app.patch("/api/media/:id", (req) => {
     const item = get("media", req.params.id, req);
@@ -491,6 +550,8 @@ export async function createApp({
   });
   app.post("/api/media/:id/vocal-isolation", async (req, reply) => {
     const item = mediaReady(req.params.id, req);
+    // An isolated copy is a second full-size video, so it counts as an import.
+    await requireRoom();
     const file = await upload(req, ".isolate-upload");
     const derived = repo.put("media", {
       userId: req.userId,
@@ -516,7 +577,7 @@ export async function createApp({
           ...derived,
           ...result,
           status: "ready",
-          expiresAt: Date.now() + ttl,
+          expiresAt: expiryOf(derived),
         });
         return derived.id;
       },
@@ -525,7 +586,7 @@ export async function createApp({
         await rm(path.join(root, file.name), { force: true });
       },
     );
-    return reply.code(202).send({ job, media: derived });
+    return reply.code(202).send({ job: withQueue(job), media: derived });
   });
   function projectBusy(id) {
     return (
@@ -553,22 +614,23 @@ export async function createApp({
         .map((a) => ({ kind: "audio", ...a })),
     ];
   }
+  async function removeFiles(item, keys) {
+    for (const key of keys)
+      if (item[key])
+        await rm(path.join(root, item[key]), { force: true }).catch((error) => {
+          // The record is deleted even if Windows temporarily holds a file open.
+          app.log.warn(
+            { error, file: item[key] },
+            "Deferred orphan-file cleanup required",
+          );
+        });
+  }
   async function removeRecords(records) {
     // Remove references atomically before yielding; a stale autosave cannot recreate them.
     repo.removeMany(records);
     for (const item of records)
-      for (const key of ["file", "audioFile", "thumbnail"]) {
-        if (item[key])
-          await rm(path.join(root, item[key]), { force: true }).catch(
-            (error) => {
-              // The record is deleted even if Windows temporarily holds a file open.
-              app.log.warn(
-                { error, file: item[key] },
-                "Deferred orphan-file cleanup required",
-              );
-            },
-          );
-      }
+      await removeFiles(item, ["file", "audioFile", "thumbnail"]);
+    storage.invalidate();
   }
   app.delete("/api/projects/:id", async (req) => {
     const project = get("project", req.params.id, req);
@@ -613,9 +675,9 @@ export async function createApp({
   });
   app.get("/api/projects/:id", (req) => {
     const project = get("project", req.params.id, req);
-    const media = mediaReady(project.mediaId, req);
-    repo.put("media", { ...media, expiresAt: Date.now() + ttl });
-    return { ...project, media };
+    // Deliberately does not refresh the source's expiry: the retention window
+    // is fixed at import, so reopening an edit cannot extend it.
+    return { ...project, media: mediaReady(project.mediaId, req) };
   });
   app.patch("/api/projects/:id", (req) => {
     const item = get("project", req.params.id, req);
@@ -683,7 +745,7 @@ export async function createApp({
         },
         () => rm(path.join(root, file.name), { force: true }),
       );
-      return reply.code(202).send({ job });
+      return reply.code(202).send({ job: withQueue(job) });
     }),
   );
   // Rendering is device-only. Retire the old CPU-heavy endpoint explicitly.
@@ -784,6 +846,7 @@ export async function createApp({
                   await rm(path.join(root, result[key]), { force: true });
               throw new Error("Account was removed.");
             }
+            const createdAt = Date.now();
             repo.put("export", {
               id,
               userId: req.userId,
@@ -793,14 +856,15 @@ export async function createApp({
               edit: spec,
               quality: ticket.quality,
               renderedOnDevice: true,
-              expiresAt: Date.now() + ttl,
+              createdAt,
+              expiresAt: createdAt + ttl,
               ...result,
             });
             return id;
           },
           () => rm(path.join(root, file.name), { force: true }),
         );
-        return reply.code(202).send({ job });
+        return reply.code(202).send({ job: withQueue(job) });
       } catch (error) {
         if (file) await rm(path.join(root, file.name), { force: true });
         throw error;
@@ -810,9 +874,9 @@ export async function createApp({
     }),
   );
   async function deleteExport(item) {
-    for (const key of ["file", "thumbnail"])
-      if (item[key]) await rm(path.join(root, item[key]), { force: true });
+    await removeFiles(item, ["file", "thumbnail"]);
     repo.remove("export", item.id);
+    storage.invalidate();
   }
   app.delete("/api/exports/:id", async (req) => {
     const item = get("export", req.params.id, req);
@@ -841,27 +905,74 @@ export async function createApp({
       );
     return reply.sendFile(item[type], { cacheControl: false });
   });
-  const cleaner = setInterval(async () => {
-    for (const item of repo.list("media"))
+  // Anything a crashed request may have left in the media directory. These
+  // names are never recorded, so nothing but age can identify an abandoned one.
+  const TEMP_UPLOAD = /\.(upload|isolate-upload|audio-upload|device-export)$/;
+  const ABANDONED_AFTER = 6 * 3600_000;
+  // A source is only held back while something is actually reading it. The
+  // whole sweep used to stop whenever any job was running, which under
+  // concurrent jobs could keep expired videos on disk indefinitely -- exactly
+  // when the space is most needed.
+  function mediaInUse(id) {
+    const now = Date.now();
+    return (
+      repo
+        .list("deviceExport")
+        .some((t) => t.project?.mediaId === id && t.expiresAt > now) ||
+      repo
+        .list("job")
+        .some(
+          (j) => ["queued", "running"].includes(j.status) && j.mediaId === id,
+        )
+    );
+  }
+  async function sweep() {
+    const now = Date.now();
+    for (const item of repo.list("media")) {
       if (
-        item.expiresAt < Date.now() &&
-        item.status === "ready" &&
-        !repo
-          .list("deviceExport")
-          .some(
-            (t) => t.project.mediaId === item.id && t.expiresAt > Date.now(),
-          ) &&
-        !queue.busy
-      ) {
-        for (const key of ["file", "audioFile", "thumbnail"])
-          if (item[key]) await rm(path.join(root, item[key]), { force: true });
-        repo.put("media", { ...item, status: "expired" });
-      }
+        item.status !== "ready" ||
+        item.expiresAt >= now ||
+        mediaInUse(item.id)
+      )
+        continue;
+      // Processed stems belong to edits of this source and are unusable
+      // without it, so they go with it rather than lingering as orphans.
+      const edits = new Set(
+        repo
+          .list("project")
+          .filter((p) => p.mediaId === item.id)
+          .map((p) => p.id),
+      );
+      for (const stem of repo.list("audio"))
+        if (edits.has(stem.projectId)) {
+          await removeFiles(stem, ["file", "audioFile"]);
+          repo.remove("audio", stem.id);
+        }
+      await removeFiles(item, ["file", "audioFile", "thumbnail"]);
+      repo.put("media", { ...item, status: "expired" });
+    }
     for (const item of repo.list("export"))
-      if (item.expiresAt < Date.now() && !queue.busy) await deleteExport(item);
+      if (item.expiresAt < now) await deleteExport(item);
     for (const ticket of repo.list("deviceExport"))
-      if (ticket.expiresAt <= Date.now())
-        repo.remove("deviceExport", ticket.id);
+      if (ticket.expiresAt <= now) repo.remove("deviceExport", ticket.id);
+    for (const entry of await readdir(root, { withFileTypes: true }).catch(
+      () => [],
+    ))
+      if (entry.isFile() && TEMP_UPLOAD.test(entry.name)) {
+        const file = path.join(root, entry.name);
+        const info = await stat(file).catch(() => null);
+        if (info && now - info.mtimeMs > ABANDONED_AFTER)
+          await rm(file, { force: true }).catch(() => {});
+      }
+    // Space has just been freed; let a paused workspace accept imports again
+    // without waiting for the measurement to age out.
+    storage.invalidate();
+  }
+  // Catch up immediately: a server that was off for two days has a backlog of
+  // expired media, and its first users should not see it as free disk.
+  await sweep();
+  const cleaner = setInterval(async () => {
+    await sweep();
     for (const [t, session] of sessions)
       if (session.expires < Date.now()) sessions.delete(t);
     for (const [ip, a] of attempts)

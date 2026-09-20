@@ -16,7 +16,7 @@
 
 ## Known development limits
 
-- One shared workspace, one serial media worker. Password sessions are in memory and expire after restart.
+- One media worker process per job, two jobs at a time (`MEDIA_JOB_CONCURRENCY`), in a single in-memory queue that is lost on restart: waiting and running jobs are failed with "Server restarted" rather than resumed. Password sessions are in memory and also end at restart.
 - Browser inference is device-dependent and does not use the hosting machine's GPU. A WebGPU provider preference does not prove every model operator ran on GPU.
 - Audio separation does two inference passes; test on real vocal/music mixtures and multiple devices before calling its quality production-ready.
 - The pinned model parameters came from the user's existing tested prototype. Windowing, compensation and edge handling should be compared against that implementation with identical audio fixtures.
@@ -24,7 +24,7 @@
 - Overlay artwork is uploaded as base64 inside one JSON body, which the API buffers in memory. The render route allows a larger body than the rest of the API so image backgrounds and image overlays fit later; move this route to multipart before raising those ceilings much further.
 - Undo/redo currently applies to edit-spec changes, not name/caption typing.
 - The canvas is fixed to 9:16 (1080×1920). Fill Reel frame crops centrally; Fit full video restores the whole source inside that canvas.
-- The existing expiry cleaner removes expired sources. Full project/derivative lifecycle cleanup and storage quotas are still required before long-term hosting.
+- The sweep removes expired sources, their thumbnails and stems, expired exports, stale export tickets and abandoned partial uploads, on startup and every minute after. It measures the data directory by walking it, which is fine for one box and would need replacing alongside object storage. A source held open by a running job waits for the next pass. Per-account quotas do not exist: the safeguard is workspace-wide, so one person's imports can pause everyone's.
 - Explicit source/project deletion now removes linked project and audio records atomically, then cleans their files; exports are independent. If Windows holds a file open, record deletion succeeds and the failed file cleanup is logged. Retrying orphan-file cleanup remains a hosting follow-up.
 - Imported sources are normalized for editing rather than retained as a separate original-quality archive.
 - No live Instagram posting integration, scheduled publishing, AI caption calls, or cloud deployment has been implemented.

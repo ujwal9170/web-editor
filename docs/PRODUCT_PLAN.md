@@ -82,7 +82,7 @@ The **Media** section will contain:
 - the original Instagram caption in an editable field;
 - actions to preview, edit, download, or delete an asset.
 
-Working default: downloaded source files remain for **7 days**, configured through `SOURCE_RETENTION_DAYS`. Opening an unfinished edit project refreshes source retention so an active project does not break unexpectedly.
+Decided: downloaded source files remain for **36 hours**, configured through `SOURCE_RETENTION_HOURS`. The deadline is fixed when the source is imported — opening an edit project does not refresh it — and exports expire on the same window from when they were saved. (Earlier drafts of this plan proposed 7 days with refresh on open.)
 
 ### 3. Focused video editor
 
@@ -381,7 +381,7 @@ Feature branches start from `develop`. Small pull requests merge into `develop`;
 ## Decisions to finalize before implementation
 
 - Authentication method: email/password, Google, or another provider.
-- Exact source retention period; current working default is 7 days.
+- ~~Exact source retention period~~ — decided: 36 hours, fixed at import, no refresh on open.
 - Names/files for the four bundled fonts.
 - Exact five approved text colors.
 - Exact five predefined background colors; custom colors will use `<input type="color">`.

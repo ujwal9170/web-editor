@@ -7,26 +7,55 @@ import {
 } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-const digest =
-  "ce74ef3b6a6024ce44211a07be9cf8bc6d87728cc852a68ab34eb8e58cde9c8b";
-await mkdir("public/vendor/ort", { recursive: true });
-await mkdir("public/models", { recursive: true });
-await copyFile(
-  "public/audio/ONNX-LICENSE.txt",
-  "public/vendor/ort/LICENSE",
-);
-for (const name of await readdir("node_modules/onnxruntime-web/dist"))
+import {
+  MODEL_PATH,
+  MODEL_SHA256,
+  ORT_DIR,
+  ORT_VERSION,
+  checkAudioAssets,
+} from "../server/audio-assets.mjs";
+
+// `--verify` checks an existing installation without downloading anything: run
+// it on the server as part of a deployment, before anyone discovers the
+// missing model by pressing Remove vocals.
+const verifyOnly = process.argv.includes("--verify");
+const report = (result) => {
+  for (const problem of result.missing) console.error(`  - ${problem}`);
+};
+
+if (verifyOnly) {
+  const result = checkAudioAssets(process.cwd(), { hash: true });
+  if (!result.available) {
+    console.error("Vocal removal is not installed correctly:");
+    report(result);
+    console.error("Run `pnpm setup:audio` on this machine.");
+    process.exit(1);
+  }
+  console.log(`${result.detail} Checksum verified.`);
+  process.exit(0);
+}
+
+await mkdir(ORT_DIR, { recursive: true });
+await mkdir(path.dirname(MODEL_PATH), { recursive: true });
+const runtime = "node_modules/onnxruntime-web";
+const installed = JSON.parse(
+  await readFile(path.join(runtime, "package.json"), "utf8"),
+).version;
+// The model is pinned to one runtime build; copying a different one over it
+// would leave a workspace that looks installed and fails at inference time.
+if (installed !== ORT_VERSION)
+  throw new Error(
+    `onnxruntime-web ${installed} is installed, but Kim Vocal 2 is pinned to ${ORT_VERSION}. Change the pin in server/audio-assets.mjs and public/audio/worker.js together, or reinstall the dependency.`,
+  );
+await copyFile("public/audio/ONNX-LICENSE.txt", path.join(ORT_DIR, "LICENSE"));
+for (const name of await readdir(path.join(runtime, "dist")))
   if (/\.(wasm|mjs|js)$/.test(name))
-    await copyFile(
-      path.join("node_modules/onnxruntime-web/dist", name),
-      path.join("public/vendor/ort", name),
-    );
-const file = "public/models/Kim_Vocal_2.onnx";
+    await copyFile(path.join(runtime, "dist", name), path.join(ORT_DIR, name));
 const valid = (buffer) =>
-  createHash("sha256").update(buffer).digest("hex") === digest;
+  createHash("sha256").update(buffer).digest("hex") === MODEL_SHA256;
 let cached;
 try {
-  cached = await readFile(file);
+  cached = await readFile(MODEL_PATH);
 } catch {}
 if (!cached || !valid(cached)) {
   console.log("Downloading pinned Kim Vocal 2 model (66.8 MB)…");
@@ -39,8 +68,14 @@ if (!cached || !valid(cached)) {
     throw new Error(
       "Model checksum changed. Review the artifact before upgrading.",
     );
-  await writeFile(file, bytes);
+  await writeFile(MODEL_PATH, bytes);
 }
-console.log(
-  "Model verified and matching ONNX Runtime 1.21.0 assets installed.",
-);
+// Same check the server runs, so a successful setup and a healthy server
+// cannot disagree about whether the feature is available.
+const result = checkAudioAssets(process.cwd());
+if (!result.available) {
+  console.error("Installation finished but did not verify:");
+  report(result);
+  process.exit(1);
+}
+console.log(`${result.detail} Verify later with \`pnpm verify:audio\`.`);

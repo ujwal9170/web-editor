@@ -24,6 +24,8 @@ import {
   KeyRound,
   UserPlus,
   Share2,
+  HardDrive,
+  Clock3,
 } from "lucide-react";
 import {
   api,
@@ -34,7 +36,14 @@ import {
   awaitJob,
   LAST_TEMPLATE_KEY,
 } from "@/lib/api";
-import type { Media, Project, Export, Job, Template } from "@/lib/types";
+import type {
+  Media,
+  Project,
+  Export,
+  Job,
+  Template,
+  Limits,
+} from "@/lib/types";
 import DeviceExportQueue from "@/components/DeviceExportQueue";
 import { useDeviceExports } from "@/lib/useDeviceExports";
 import CaptionPreview from "@/components/CaptionPreview";
@@ -47,6 +56,8 @@ import {
 } from "@/shared/file-share.mjs";
 import ProjectCard from "@/components/ProjectCard";
 import MediaCard from "@/components/MediaCard";
+import ExpiryTag from "@/components/ExpiryTag";
+import { useAudioModel } from "@/lib/useAudioModel";
 import { useWebMCP } from "@/lib/useWebMCP";
 
 // Editor is a large, canvas/WebCodecs-heavy component that most visits
@@ -66,6 +77,32 @@ type QueueItem = {
   status: "queued" | "processing" | "done" | "failed";
   detail: string;
 };
+// One line describing what the server is doing with this account's work. The
+// server runs a small number of media jobs at once and everything else waits,
+// so a job sitting at 0% needs to say why. The position counts every account's
+// work, because that is what the wait actually depends on.
+function queueSummary(active: Job[]) {
+  const running = active.filter((j) => j.status === "running");
+  const waiting = active.filter((j) => j.status === "queued");
+  const next = waiting.reduce(
+    (best, j) =>
+      j.queuePosition && (!best || j.queuePosition < best)
+        ? j.queuePosition
+        : best,
+    0,
+  );
+  const limit = active.find((j) => j.queueLimit)?.queueLimit ?? 1;
+  const parts = [];
+  if (running.length)
+    parts.push(
+      `${running.length} ${running.length === 1 ? "job" : "jobs"} processing (${running[0].type})`,
+    );
+  if (waiting.length)
+    parts.push(
+      `${waiting.length} waiting${next ? ` — next is #${next} in line` : ""}`,
+    );
+  return `${parts.join(" · ")}. The server runs ${limit} at a time; you can keep editing.`;
+}
 type AdminUser = {
   id: string;
   username: string;
@@ -86,6 +123,7 @@ export default function Studio() {
     [projects, setProjects] = useState<Project[]>([]),
     [exports, setExports] = useState<Export[]>([]),
     [jobs, setJobs] = useState<Job[]>([]),
+    [limits, setLimits] = useState<Limits | null>(null),
     [templates, setTemplates] = useState<Template[]>([]);
   const [project, setProject] = useState<Project | null>(null),
     [query, setQuery] = useState(""),
@@ -198,18 +236,22 @@ export default function Studio() {
     bump();
   }
   async function refresh() {
-    const [m, p, e, j, t] = await Promise.all([
+    const [m, p, e, j, t, l] = await Promise.all([
       api<Media[]>("/media"),
       api<Project[]>("/projects"),
       api<Export[]>("/exports"),
       api<Job[]>("/jobs"),
       api<Template[]>("/templates"),
+      // Retention and the storage headroom that decides whether new imports
+      // are accepted at all; cheap enough to ride along with every poll.
+      api<Limits>("/limits"),
     ]);
     setMedia(m);
     setProjects(p);
     setExports(e);
     setJobs(j);
     setTemplates(t);
+    setLimits(l);
     return j;
   }
   useEffect(() => {
@@ -453,6 +495,7 @@ export default function Studio() {
       await refresh();
     });
   }
+  const audioModel = useAudioModel(view === "media" && mediaTab === "queue");
   const active = jobs.filter((j) => ["running", "queued"].includes(j.status));
   void queueTick;
   const queue = queueRef.current,
@@ -618,11 +661,19 @@ export default function Studio() {
             </button>
           </div>
         )}
+        {limits && limits.storage.level !== "ok" && (
+          <div
+            role="alert"
+            className={`notice ${limits.storage.level === "full" ? "error" : "warn"}`}
+          >
+            <HardDrive size={16} />
+            {limits.storage.message}
+          </div>
+        )}
         {active.length > 0 && (
           <div className="notice">
             <LoaderCircle className="spin" size={16} />
-            {active.length} {active.length === 1 ? "job" : "jobs"} processing —{" "}
-            {active[0].type}. You can keep editing.
+            {queueSummary(active)}
           </div>
         )}
         {view === "admin" && isAdmin ? (
@@ -794,6 +845,16 @@ export default function Studio() {
                       ? "Your finished edits, with captions saved alongside."
                       : "Open a saved project or start with a clip from Media."}
                 </p>
+                {limits && (
+                  <p className="retention-note">
+                    <Clock3 size={14} />
+                    {view === "exports"
+                      ? `Exports are deleted ${limits.retentionHours} hours after they are saved. Download anything you need to keep.`
+                      : view === "editor"
+                        ? `An edit stops working once its source is deleted, ${limits.retentionHours} hours after it was imported. Reopening it does not extend that.`
+                        : `Imported videos are deleted ${limits.retentionHours} hours after they arrive. Opening or editing one does not extend that.`}
+                  </p>
+                )}
               </div>
               {!(view === "media" && mediaTab === "all") && (
                 <button className="primary" onClick={() => setImporting(true)}>
@@ -961,6 +1022,12 @@ export default function Studio() {
                   )}
                 </div>
                 <hr />
+                {audioModel && !audioModel.available && (
+                  <div role="alert" className="notice error">
+                    <AlertCircle size={16} />
+                    {audioModel.detail}
+                  </div>
+                )}
                 <div className="queue-toolbar">
                   <div>
                     <strong>
@@ -971,7 +1038,11 @@ export default function Studio() {
                   </div>
                   <button
                     className="primary"
-                    disabled={!queuedCount || runningRef.current}
+                    disabled={
+                      !queuedCount ||
+                      runningRef.current ||
+                      audioModel?.available === false
+                    }
                     onClick={() => runQueue()}
                   >
                     {runningRef.current ? (
@@ -1133,9 +1204,8 @@ export default function Studio() {
                         <div className="card-footer">
                           <span>
                             {ago(x.createdAt)} · {size(x.size)}
-                            {x.expiresAt
-                              ? ` · ${Math.max(0, Math.ceil((x.expiresAt - Date.now()) / 86400_000))} days left`
-                              : ""}
+                            {x.expiresAt ? " · " : ""}
+                            <ExpiryTag at={x.expiresAt} />
                           </span>
                           <div>
                             <button

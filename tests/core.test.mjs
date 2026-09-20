@@ -96,7 +96,6 @@ test("download API routes all three sources to the same import queue", async () 
   const app = await createApp({
     dataDir: root,
     queueFactory: () => ({
-      busy: false,
       add(type, payload) {
         queued.push(payload);
         return { id: "test-job", type, status: "queued" };
@@ -640,7 +639,6 @@ test("legacy server-render requests cannot enqueue a CPU render", async () => {
   const app = await createApp({
     dataDir: root,
     queueFactory: () => ({
-      busy: false,
       add(type, payload) {
         queued.push(payload);
         return { id: "test-job", type, status: "queued" };

@@ -95,4 +95,26 @@ export type Job = {
   progress: number;
   error?: string;
   resultId?: string;
+  // Where this job sits in the server-wide line: 1 is next to start, 0 means
+  // it is running already. The counts describe the whole server, not one
+  // account, which is what makes a wait explainable.
+  queuePosition?: number;
+  queueRunning?: number;
+  queueWaiting?: number;
+  queueLimit?: number;
+};
+export type Limits = {
+  retentionHours: number;
+  storage: {
+    level: "ok" | "warning" | "full";
+    message: string;
+    usedBytes: number;
+    freeBytes: number | null;
+    quotaBytes: number;
+  };
+};
+export type AudioModel = {
+  available: boolean;
+  detail: string;
+  missing: string[];
 };

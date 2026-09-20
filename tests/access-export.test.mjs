@@ -15,7 +15,6 @@ async function fixture(t) {
   const app = await createApp({
     dataDir: root,
     queueFactory: () => ({
-      busy: false,
       add(type, payload, done) {
         submitted.push({ type, payload, done });
         return { id: crypto.randomUUID(), status: "queued" };

@@ -50,6 +50,7 @@ import "@fontsource/rubik/700.css";
 import "@fontsource/zilla-slab/400.css";
 import "@fontsource/zilla-slab/700.css";
 import { api, fileUrl, clock, awaitJob, LAST_TEMPLATE_KEY } from "@/lib/api";
+import { useAudioModel } from "@/lib/useAudioModel";
 import { cropGeometry } from "@/shared/export.mjs";
 import {
   preview,
@@ -107,6 +108,11 @@ export default function Editor({
     [selected, setSelected] = useState(0),
     [saving, setSaving] = useState("Saved"),
     [rendering, setRendering] = useState(false);
+  // Vocal separation runs in this browser but needs the model and the runtime
+  // that the server installs. Checked when the Audio tab opens, so the buttons
+  // can say the feature is unavailable rather than failing on the first click.
+  const audioModel = useAudioModel(tab === "audio");
+  const audioUnavailable = audioModel ? !audioModel.available : false;
   const [past, setPast] = useState<Edit[]>([]),
     [future, setFuture] = useState<Edit[]>([]),
     [audioStatus, setAudioStatus] = useState(""),
@@ -1911,16 +1917,21 @@ export default function Editor({
                   </select>
                 </label>
                 <hr />
+                {audioUnavailable && (
+                  <p role="alert" className="hint unavailable">
+                    {audioModel?.detail}
+                  </p>
+                )}
                 <button
                   className="subtle wide"
-                  disabled={separating}
+                  disabled={separating || audioUnavailable}
                   onClick={() => separate("remove-vocals")}
                 >
                   <Music2 size={17} /> Remove vocals
                 </button>
                 <button
                   className="subtle wide"
-                  disabled={separating}
+                  disabled={separating || audioUnavailable}
                   onClick={() => separate("vocals-only")}
                 >
                   Keep vocals only

@@ -1,10 +1,24 @@
-import { spawn } from "node:child_process";
+import { spawn as spawnProcess } from "node:child_process";
 import { writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 
-export function createQueue(repo, root) {
+// How many media jobs the box runs at once. Two by default: a long yt-dlp
+// download no longer holds up a short export acceptance behind it, while the
+// machine keeps enough CPU for the browsers doing the actual rendering.
+// Everything past the limit waits its turn in arrival order and can say where
+// in the line it is.
+function concurrency(requested) {
+  return Math.min(
+    4,
+    Math.max(1, Number(requested || process.env.MEDIA_JOB_CONCURRENCY) || 2),
+  );
+}
+
+export function createQueue(repo, root, options = {}) {
+  const limit = concurrency(options.limit);
+  const spawn = options.spawn || spawnProcess;
   const pending = [];
-  let busy = false;
+  const running = new Set();
   const python = process.env.PYTHON || "python";
   const worker = path.resolve("worker/media.py");
   for (const job of repo.list("job"))
@@ -14,10 +28,8 @@ export function createQueue(repo, root) {
         status: "failed",
         error: "Server restarted. Please submit this operation again.",
       });
-  async function drain() {
-    if (busy || !pending.length) return;
-    busy = true;
-    const { job, payload, done, failed } = pending.shift();
+  async function run(entry) {
+    const { job, payload, done, failed } = entry;
     const specPath = path.join(root, `${job.id}.job.json`);
     try {
       repo.put("job", { ...job, status: "running", progress: 5 });
@@ -68,8 +80,15 @@ export function createQueue(repo, root) {
       });
     } finally {
       await rm(specPath, { force: true });
-      busy = false;
-      void drain();
+      running.delete(entry);
+      drain();
+    }
+  }
+  function drain() {
+    while (running.size < limit && pending.length) {
+      const entry = pending.shift();
+      running.add(entry);
+      void run(entry);
     }
   }
   return {
@@ -83,11 +102,16 @@ export function createQueue(repo, root) {
         userId: payload.userId,
       });
       pending.push({ job, payload, done, failed });
-      void drain();
+      drain();
       return job;
     },
-    get busy() {
-      return busy || pending.length > 0;
+    // 1 means "next to start"; 0 means the job is not waiting (it is already
+    // running, or it finished).
+    position(id) {
+      return pending.findIndex((entry) => entry.job.id === id) + 1;
+    },
+    stats() {
+      return { limit, running: running.size, waiting: pending.length };
     },
   };
 }

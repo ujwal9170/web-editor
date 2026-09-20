@@ -9,6 +9,7 @@ import {
   ListPlus,
 } from "lucide-react";
 import { fileUrl, clock, size } from "@/lib/api";
+import ExpiryTag from "./ExpiryTag";
 import type { Media } from "@/lib/types";
 
 const sourceLabels: Record<string, string> = {
@@ -71,11 +72,7 @@ export default function MediaCard({
           <span>·</span> {size(m.size)}
         </div>
         <div className="card-footer">
-          <span>
-            {m.expiresAt
-              ? `${Math.max(0, Math.ceil((m.expiresAt - Date.now()) / 86400_000))} days left`
-              : m.status}
-          </span>
+          <ExpiryTag at={m.expiresAt} fallback={m.status} />
           <div>
             <button
               aria-label={`Caption for ${m.name}`}

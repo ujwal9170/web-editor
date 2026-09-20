@@ -57,6 +57,25 @@ export function ago(at = 0) {
     month: "short",
   });
 }
+// Sources and exports are deleted a fixed number of hours after they arrive,
+// and that deadline never moves, so the countdown has to read in hours: "1 day
+// left" would hide that a clip goes this evening. Urgent from six hours out --
+// about the point where "I'll finish it tomorrow" stops being true.
+export function expiry(at = 0): { text: string; urgent: boolean } | null {
+  if (!at) return null;
+  const ms = at - Date.now();
+  if (ms <= 0) return { text: "Expired", urgent: true };
+  if (ms < 3_600_000)
+    return {
+      text: `${Math.max(1, Math.round(ms / 60_000))} min left`,
+      urgent: true,
+    };
+  const hours = Math.round(ms / 3_600_000);
+  return {
+    text: `${hours} hr${hours === 1 ? "" : "s"} left`,
+    urgent: ms <= 6 * 3_600_000,
+  };
+}
 export const clock = (seconds = 0) =>
   `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
     .toString()

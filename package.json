@@ -18,6 +18,7 @@
     "test:smoke": "node scripts/smoke.mjs",
     "format": "prettier --write app components lib shared server scripts tests public/audio docs README.md next.config.mjs",
     "setup:audio": "node scripts/setup-audio.mjs",
+    "verify:audio": "node scripts/setup-audio.mjs --verify",
     "user": "node scripts/user.mjs"
   },
   "dependencies": {
