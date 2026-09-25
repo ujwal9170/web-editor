@@ -36,6 +36,7 @@ import {
   Bold,
   Maximize2,
   Minimize2,
+  Server,
 } from "lucide-react";
 // Only the editor's Text tab ever renders these -- loaded here instead of
 // the root layout so pages that never open the editor never pay for them.
@@ -53,6 +54,7 @@ import { api, fileUrl, clock, awaitJob, LAST_TEMPLATE_KEY } from "@/lib/api";
 import { useAudioModel } from "@/lib/useAudioModel";
 import { cropGeometry } from "@/shared/export.mjs";
 import {
+  artwork,
   preview,
   fonts,
   textColors,
@@ -62,7 +64,10 @@ import {
   MIN_CROP,
   MIN_BLUR,
   MIN_BLUR_WIDTH,
+  MAX_BLUR_REGIONS,
   SAFE_ZONE,
+  clampTextPosition,
+  textPositionLimits,
   measureOverlay,
   type Crop as CropRect,
 } from "@/lib/canvas";
@@ -76,6 +81,10 @@ import type {
 } from "@/lib/types";
 import type { ExportTask } from "@/lib/useDeviceExports";
 
+// Which blur box a live drag is moving, and where it is right now. Index
+// rather than id: the list is short and never reordered, so every write
+// addresses a box the same way.
+type LiveBlur = { index: number; region: BlurRegion };
 export default function Editor({
   initial,
   onError,
@@ -123,12 +132,18 @@ export default function Editor({
       mode: string;
     } | null>(null),
     [quality, setQuality] = useState<"1080p" | "720p">("1080p"),
+    // Where the file gets made. The device stays the default: it is free, it
+    // runs in parallel across people, and it needs nothing from the box. The
+    // server is for a browser without WebCodecs, or for handing off a long
+    // edit and closing the tab.
+    [destination, setDestination] = useState<"device" | "server">("device"),
+    [renderStatus, setRenderStatus] = useState(""),
     [exportMenuOpen, setExportMenuOpen] = useState(false),
     [sheetOpen, setSheetOpen] = useState(false),
     [deviceSupported, setDeviceSupported] = useState(false),
     [freehand, setFreehand] = useState(false),
     [liveCrop, setLiveCrop] = useState<CropRect | null>(null),
-    [liveBlur, setLiveBlur] = useState<BlurRegion | null>(null),
+    [liveBlur, setLiveBlur] = useState<LiveBlur | null>(null),
     [liveTextPos, setLiveTextPos] = useState<{
       id: string;
       x: number;
@@ -136,7 +151,10 @@ export default function Editor({
     } | null>(null),
     [selectedTextId, setSelectedTextId] = useState<string | null>(null),
     [videoSelected, setVideoSelected] = useState(false),
-    [blurSelected, setBlurSelected] = useState(false),
+    // Which blur box the on-canvas handles act on, by position in edit.blur.
+    // null means none is selected -- the boxes are all still drawn and still
+    // grabbable, they just have no handles showing.
+    [blurSelected, setBlurSelected] = useState<number | null>(null),
     [fullscreenPreview, setFullscreenPreview] = useState(false),
     [liveVideoZoom, setLiveVideoZoom] = useState<number | null>(null),
     [videoMenuOpen, setVideoMenuOpen] = useState(false),
@@ -161,7 +179,7 @@ export default function Editor({
   // Kept off React state entirely -- read straight from the draw loop -- so
   // 60fps pointermove never touches the undo stack or autosave; only
   // pointerup commits a single change().
-  const liveBlurRef = useRef<BlurRegion | null>(null),
+  const liveBlurRef = useRef<LiveBlur | null>(null),
     liveOffset = useRef<{ x: number; y: number } | null>(null),
     panDrag = useRef<{
       startX: number;
@@ -255,9 +273,13 @@ export default function Editor({
     [stem],
   );
   useEffect(() => {
-    import("@/lib/deviceExport").then(({ deviceExportSupported }) =>
-      setDeviceSupported(deviceExportSupported()),
-    );
+    import("@/lib/deviceExport").then(({ deviceExportSupported }) => {
+      const supported = deviceExportSupported();
+      setDeviceSupported(supported);
+      // A browser that cannot encode has nothing to choose between, so start
+      // on the option that works rather than on a disabled one.
+      if (!supported) setDestination("server");
+    });
   }, []);
   useEffect(() => {
     // Each tool starts at its own header, not the previous text card's scroll offset.
@@ -389,6 +411,7 @@ export default function Editor({
     setLiveCrop(null);
     setSelectedTextId(null);
     setLiveTextPos(null);
+    setBlurSelected(null);
     const durationMs = duration * 1000;
     change({
       ...edit,
@@ -414,9 +437,18 @@ export default function Editor({
   function updateOverlay(id: string, changes: Partial<Overlay>) {
     change({
       ...edit,
-      textOverlays: edit.textOverlays.map((t) =>
-        t.id === id ? { ...t, ...changes } : t,
-      ),
+      textOverlays: edit.textOverlays.map((t) => {
+        if (t.id !== id) return t;
+        const next = { ...t, ...changes };
+        // More words, a bigger size or a wider font all grow the block, so
+        // the safe-zone clamp runs on every change rather than only on a
+        // drag -- otherwise typing is a way of pushing a caption up into the
+        // band the drag refuses to enter.
+        return {
+          ...next,
+          ...clampTextPosition(next.x, next.y, overlayBoxFraction(next)),
+        };
+      }),
     });
   }
   // The starting words are a suggestion, not content: the card opens with its
@@ -459,6 +491,42 @@ export default function Editor({
     field.select();
     revealOverlayCard(id);
   }
+  function updateBlur(index: number, changes: Partial<BlurRegion>) {
+    change({
+      ...edit,
+      blur: edit.blur.map((b, i) => (i === index ? { ...b, ...changes } : b)),
+    });
+  }
+  // A new box lands in the middle of the frame, over the whole clip, and is
+  // selected so its handles are immediately under the pointer.
+  function addBlur() {
+    if (edit.blur.length >= MAX_BLUR_REGIONS) return;
+    setBlurSelected(edit.blur.length);
+    setVideoSelected(false);
+    setSelectedTextId(null);
+    change({
+      ...edit,
+      blur: [
+        ...edit.blur,
+        {
+          id: crypto.randomUUID(),
+          x: 0.3,
+          y: 0.4,
+          width: 0.4,
+          height: 0.2,
+          intensity: 50,
+          startMs: 0,
+          endMs: duration * 1000,
+        },
+      ],
+    });
+  }
+  function removeBlur(index: number) {
+    liveBlurRef.current = null;
+    setLiveBlur(null);
+    setBlurSelected(null);
+    change({ ...edit, blur: edit.blur.filter((_, i) => i !== index) });
+  }
   function removeOverlay(id: string) {
     endTextInput();
     change({
@@ -471,7 +539,7 @@ export default function Editor({
   // view in the (short, scrollable) panel, so you don't have to go hunting
   // for the right one among several.
   function selectOverlay(id: string) {
-    setBlurSelected(false);
+    setBlurSelected(null);
     setVideoSelected(false);
     setSelectedTextId(id);
     revealOverlayCard(id);
@@ -491,6 +559,17 @@ export default function Editor({
         behavior: "instant",
       });
     });
+  }
+  // Size, then the two position axes -- the latter bounded by the safe zone
+  // for this block's own measured footprint, so the sliders travel exactly as
+  // far as a drag would take it and no further.
+  function textSliderRows(t: Overlay) {
+    const limits = textPositionLimits(overlayBoxFraction(t));
+    return [
+      ["size", "Size", 16, 120],
+      ["x", "Horizontal", limits.minX, limits.maxX],
+      ["y", "Vertical", limits.minY, limits.maxY],
+    ] as const;
   }
   // The drag handle's size in canvas fractions, from the text's *actual*
   // measured footprint -- not a guess -- so grabbing it feels like grabbing
@@ -618,7 +697,7 @@ export default function Editor({
     let frame: number;
     let lastEdit: Edit | null = null, lastTime = -1, lastDraw = 0, lastReady = -1;
     let lastPanX: number | null = null, lastPanY: number | null = null;
-    let lastBlur: BlurRegion | null = null;
+    let lastBlur: LiveBlur | null = null;
     let lastZoom: number | null = null;
     const draw = () => {
       const v = video.current,
@@ -667,7 +746,13 @@ export default function Editor({
           // Mid-drag the committed edit still holds the old rectangle, so the
           // preview has to be told about the one under the pointer or the
           // blur would only catch up once the drag ended.
-          if (blur) drawEdit = { ...drawEdit, blur };
+          if (blur)
+            drawEdit = {
+              ...drawEdit,
+              blur: drawEdit.blur.map((b, i) =>
+                i === blur.index ? blur.region : b,
+              ),
+            };
           if (liveZoomRef.current !== null) drawEdit = { ...drawEdit, crop: { ...drawEdit.crop, zoom: liveZoomRef.current } };
           preview(ctx, v, drawEdit);
           lastDraw = now;
@@ -728,7 +813,7 @@ export default function Editor({
   // there is no sheet, so the panel and its highlighted tab stayed lit with
   // no way to put them away.
   function retireTool() {
-    setBlurSelected(false);
+    setBlurSelected(null);
     setVideoSelected(false);
     if (sheetOpen) closeSheet();
     setTab("");
@@ -843,7 +928,7 @@ export default function Editor({
     // is the "I'm done with that tool" tap the stage underneath would have
     // handled. Only a real drag is exempt.
     else if (panDrag.current && !panDrag.current.moved) {
-      setBlurSelected(false);
+      setBlurSelected(null);
       setSelectedTextId(null);
       setVideoSelected(true);
     }
@@ -874,8 +959,10 @@ export default function Editor({
     setSelected(i + 1);
   }
   async function exportVideo() {
-    if (!deviceSupported) {
-      onError("Device export needs HTTPS and a supported browser with WebCodecs. Update your browser; server rendering is disabled.");
+    if (destination === "device" && !deviceSupported) {
+      onError(
+        "Device export needs HTTPS and a supported browser with WebCodecs. Switch this export to the server, or update your browser.",
+      );
       return;
     }
     setRendering(true);
@@ -883,13 +970,43 @@ export default function Editor({
     try {
       const snapshot = structuredClone({ edit, name, caption });
       const p = await save(snapshot);
-      await onQueue({ project: { ...p, media }, quality });
+      if (destination === "server") await renderOnServer(p);
+      else await onQueue({ project: { ...p, media }, quality });
       if (alive.current) setExportMenuOpen(false);
     } catch (e: any) {
       onError(e.message);
+      if (alive.current) setRenderStatus("");
     } finally {
       if (alive.current) setRendering(false);
     }
+  }
+  // The browser draws the background and the text, because those have to match
+  // the preview exactly; the server does the video, the cuts, the blur and the
+  // audio. Leaving this page does not cancel the render -- the job belongs to
+  // the server from here, and the finished video lands in Edited videos either
+  // way. Closing the tab only stops the reporting.
+  async function renderOnServer(p: Project) {
+    setRenderStatus("Preparing artwork…");
+    const images = await artwork(edit, quality);
+    const path = "/projects/" + initial.id + "/renders";
+    const { job } = await api(path, {
+      method: "POST",
+      body: JSON.stringify({ ...images, revision: p.revision, quality }),
+    });
+    setRenderStatus("Queued on the server…");
+    await awaitJob(job.id, (j) => {
+      if (!alive.current) return;
+      setRenderStatus(
+        j.status === "queued"
+          ? "Waiting for the server" +
+              (j.queuePosition ? " — #" + j.queuePosition + " in line" : "") +
+              "…"
+          : "Rendering on the server…",
+      );
+    });
+    if (!alive.current) return;
+    setRenderStatus("Saved to Edited videos.");
+    setTimeout(() => alive.current && setRenderStatus(""), 6000);
   }
   async function separate(mode: string) {
     setSeparating(true);
@@ -960,8 +1077,11 @@ export default function Editor({
             maxLength={200}
             onChange={(e) => setName(e.target.value)}
           />
-          <span className="save-state">
-            {saving} · {clock(effective)} edited length
+          <span
+            className="save-state"
+            role={renderStatus ? "status" : undefined}
+          >
+            {renderStatus || saving + " · " + clock(effective) + " edited length"}
           </span>
         </div>
         <div className="row">
@@ -985,7 +1105,9 @@ export default function Editor({
               <span className="export-label-full">
                 {rendering
                   ? "Queuing…"
-                  : `Export ${quality} · this device`}
+                  : "Export " +
+                    quality +
+                    (destination === "server" ? " · server" : " · this device")}
               </span>
               <span className="export-label-short">
                 {rendering ? "…" : "Export"}
@@ -1009,7 +1131,7 @@ export default function Editor({
                     type="radio"
                     name="quality"
                     checked={quality === "1080p"}
-                    onChange={() => { setQuality("1080p"); setExportMenuOpen(false); }}
+                    onChange={() => setQuality("1080p")}
                   />
                   1080p
                 </label>
@@ -1018,12 +1140,49 @@ export default function Editor({
                     type="radio"
                     name="quality"
                     checked={quality === "720p"}
-                    onChange={() => { setQuality("720p"); setExportMenuOpen(false); }}
+                    onChange={() => setQuality("720p")}
                   />
                   720p
                 </label>
-                <p className="hint"><Smartphone size={15} /> This device only. Exports continue while you edit another video.</p>
-                {!deviceSupported && <p role="status">Requires HTTPS and a supported WebCodecs browser.</p>}
+                <span className="export-options-label">Render on</span>
+                <label className="export-option-row">
+                  <input
+                    type="radio"
+                    name="destination"
+                    checked={destination === "device"}
+                    disabled={!deviceSupported}
+                    onChange={() => setDestination("device")}
+                  />
+                  This device
+                </label>
+                <label className="export-option-row">
+                  <input
+                    type="radio"
+                    name="destination"
+                    checked={destination === "server"}
+                    onChange={() => setDestination("server")}
+                  />
+                  The server
+                </label>
+                {destination === "device" ? (
+                  <p className="hint">
+                    <Smartphone size={15} /> Rendered here, in this browser.
+                    Exports continue while you edit another video, and the tab
+                    has to stay open.
+                  </p>
+                ) : (
+                  <p className="hint">
+                    <Server size={15} /> Rendered on the box, one video at a
+                    time. Slower to start when someone else is already
+                    rendering, but it finishes whether or not you stay.
+                  </p>
+                )}
+                {!deviceSupported && (
+                  <p role="status">
+                    This browser cannot render on the device (needs HTTPS and
+                    WebCodecs) — use the server.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -1143,30 +1302,47 @@ export default function Editor({
                 whatever tab is open: grabbing a blur box or a caption is how
                 you'd expect to move it, and having to find the matching tab
                 first is a detour. Taking hold of one selects its tool. */}
-            {!freehand && (liveBlur ?? edit.blur) && (
-              <BlurOverlay
-                region={(liveBlur ?? edit.blur)!}
-                active={blurSelected && !selectedTextId && !videoSelected}
-                onCancel={() => { liveBlurRef.current = null; setLiveBlur(null); }}
-                onGrab={() => { setBlurSelected(true); setSelectedTextId(null); setVideoSelected(false); }}
-                onDelete={() => {
-                  liveBlurRef.current = null;
-                  setLiveBlur(null);
-                  change({ ...edit, blur: null });
-                }}
-                onChange={(b) => {
-                  liveBlurRef.current = b;
-                  setLiveBlur(b);
-                }}
-                onCommit={() => {
-                  setLiveBlur((b) => {
-                    if (b) change({ ...edit, blur: b });
+            {!freehand &&
+              edit.blur.map((box, i) => (
+                <BlurOverlay
+                  key={box.id ?? i}
+                  region={liveBlur?.index === i ? liveBlur.region : box}
+                  // Only the selected box shows handles, so overlapping boxes
+                  // don't pile eight grips on top of each other -- but all of
+                  // them stay grabbable, and taking hold of one selects it.
+                  active={
+                    blurSelected === i && !selectedTextId && !videoSelected
+                  }
+                  onCancel={() => {
                     liveBlurRef.current = null;
-                    return null;
-                  });
-                }}
-              />
-            )}
+                    setLiveBlur(null);
+                  }}
+                  onGrab={() => {
+                    setBlurSelected(i);
+                    setSelectedTextId(null);
+                    setVideoSelected(false);
+                  }}
+                  onDelete={() => removeBlur(i)}
+                  onChange={(region) => {
+                    const live = { index: i, region };
+                    liveBlurRef.current = live;
+                    setLiveBlur(live);
+                  }}
+                  onCommit={() => {
+                    setLiveBlur((live) => {
+                      if (live)
+                        change({
+                          ...edit,
+                          blur: edit.blur.map((b, j) =>
+                            j === live.index ? live.region : b,
+                          ),
+                        });
+                      liveBlurRef.current = null;
+                      return null;
+                    });
+                  }}
+                />
+              ))}
             {!freehand && (
               <div
                 className="text-drag-frame"
@@ -1386,7 +1562,9 @@ export default function Editor({
                       setSelectedTextId(null);
                     } else {
                       setTab(key);
-                      setBlurSelected(key === "blur");
+                      setBlurSelected(
+                        key === "blur" && edit.blur.length ? 0 : null,
+                      );
                       if (key === "blur") setVideoSelected(false);
                       setSheetOpen(true);
                       if (key !== "crop") exitFreehand();
@@ -1539,65 +1717,88 @@ export default function Editor({
             {tab === "blur" && (
               <>
                 <h2>Blur</h2>
-                {edit.blur ? (
-                  <>
-                    <p className="hint">
-                      Drag the box on the video to move it, or its corners to
-                      resize.
-                    </p>
+                <p className="hint">
+                  Hide a face, a logo or a handle behind a blurred box. Drag a
+                  box on the video to move it, or its corners to resize.
+                </p>
+                {edit.blur.map((box, i) => (
+                  <div
+                    className={`blur-card${blurSelected === i ? " selected" : ""}`}
+                    key={box.id ?? i}
+                    onPointerDown={() => {
+                      setBlurSelected(i);
+                      setSelectedTextId(null);
+                      setVideoSelected(false);
+                    }}
+                  >
+                    <div className="row">
+                      <strong>Box {i + 1}</strong>
+                      <button
+                        className="subtle"
+                        aria-label={`Remove blur box ${i + 1}`}
+                        onClick={() => removeBlur(i)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                     <label>
-                      Intensity <span>{edit.blur.intensity}</span>
+                      Intensity <span>{box.intensity}</span>
                       <input
                         type="range"
                         min={1}
                         max={100}
-                        value={edit.blur.intensity}
+                        aria-label={`Intensity for blur box ${i + 1}`}
+                        value={box.intensity}
                         onChange={(e) =>
-                          change({
-                            ...edit,
-                            blur: {
-                              ...edit.blur!,
-                              intensity: Number(e.target.value),
-                            },
-                          })
+                          updateBlur(i, { intensity: Number(e.target.value) })
                         }
                       />
                     </label>
-                    <button
-                      className="subtle wide"
-                      onClick={() => {
-                        liveBlurRef.current = null;
-                        setLiveBlur(null);
-                        change({ ...edit, blur: null });
-                      }}
-                    >
-                      <Trash2 size={15} /> Remove blur
-                    </button>
-                  </>
+                    {/* Same source-timeline seconds the text cards use, so a
+                        box can cover a logo only while it is on screen
+                        instead of blurring the whole clip. */}
+                    <div className="row">
+                      <label>
+                        From (sec)
+                        <input
+                          type="number"
+                          min="0"
+                          max={(box.endMs ?? duration * 1000) / 1000 - 0.1}
+                          step="0.1"
+                          value={(box.startMs ?? 0) / 1000}
+                          onChange={(e) =>
+                            updateBlur(i, {
+                              startMs: Number(e.target.value) * 1000,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        To (sec)
+                        <input
+                          type="number"
+                          min={(box.startMs ?? 0) / 1000 + 0.1}
+                          max={duration}
+                          step="0.1"
+                          value={(box.endMs ?? duration * 1000) / 1000}
+                          onChange={(e) =>
+                            updateBlur(i, {
+                              endMs: Number(e.target.value) * 1000,
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ))}
+                {edit.blur.length < MAX_BLUR_REGIONS ? (
+                  <button className="primary wide" onClick={addBlur}>
+                    <Droplet size={15} /> Add blur box
+                  </button>
                 ) : (
-                  <>
-                    <p className="hint">
-                      Hide a face, a logo or a handle behind a blurred box.
-                    </p>
-                    <button
-                      className="primary wide"
-                      onClick={() => {
-                        setBlurSelected(true); setVideoSelected(false); setSelectedTextId(null);
-                        change({
-                          ...edit,
-                          blur: {
-                            x: 0.3,
-                            y: 0.4,
-                            width: 0.4,
-                            height: 0.2,
-                            intensity: 50,
-                          },
-                        });
-                      }}
-                    >
-                      <Droplet size={15} /> Add blur box
-                    </button>
-                  </>
+                  <p className="hint">
+                    {MAX_BLUR_REGIONS} boxes is the limit for one edit.
+                  </p>
                 )}
               </>
             )}
@@ -1786,11 +1987,7 @@ export default function Editor({
                         />
                       ))}
                     </div>
-                    {[
-                      ["size", "Size", 16, 120],
-                      ["x", "Horizontal", 0, 1],
-                      ["y", "Vertical", 0, 1],
-                    ].map(([key, label, min, max]) => (
+                    {textSliderRows(t).map(([key, label, min, max]) => (
                       <label key={key} className="text-slider-row">
                         <span>{label}</span>
                         <Slider
@@ -2508,23 +2705,24 @@ function TextDragHandle({
       return;
     d.moved = true;
     if (!d.allowed) return;
-    // Capped at 0.9 rather than 1 -- dragging text flush to the video's
-    // right/bottom edge crops it against safe-zone overlays (captions, UI
-    // chrome) on most platforms it gets reposted to. Top and left get their
-    // own floors, each offset by half the box so its rendered footprint stays
-    // out of the band, not merely its centre point.
-    const minY = SAFE_ZONE.top + height / 2,
-      minX = SAFE_ZONE.left + width / 2,
-      maxX = 1 - SAFE_ZONE.right - width / 2;
-    const rawX = Math.min(
-        Math.max(minX, maxX),
-        Math.max(minX, d.startVX + pixelDx / d.boxWidth),
-      ),
-      rawY = Math.min(0.9, Math.max(minY, d.startVY + pixelDy / d.boxHeight));
-    const x = snapToCentre(rawX),
-      y = snapToCentre(rawY);
-    setSnapped({ x: x !== rawX, y: y !== rawY });
-    onChange(x, y);
+    // clampTextPosition (lib/canvas.ts) owns where text may sit; the sliders
+    // and every other edit use it too, so nothing can place a caption
+    // somewhere a drag refuses to take it. Snapping to the centre line is
+    // re-clamped rather than trusted: on a block tall enough to fill the
+    // usable area, dead centre is itself out of bounds.
+    const box = { width, height };
+    const free = clampTextPosition(
+      d.startVX + pixelDx / d.boxWidth,
+      d.startVY + pixelDy / d.boxHeight,
+      box,
+    );
+    const snapped = clampTextPosition(
+      snapToCentre(free.x),
+      snapToCentre(free.y),
+      box,
+    );
+    setSnapped({ x: snapped.x !== free.x, y: snapped.y !== free.y });
+    onChange(snapped.x, snapped.y);
   }
   function up(e: ReactPointerEvent<HTMLDivElement>) {
     if (drag.current?.pointerId !== e.pointerId) return;
@@ -2539,11 +2737,25 @@ function TextDragHandle({
     <>
       {dragging && (
         <>
-          <div className="text-safe-zone top" aria-hidden="true">
+          {/* Sized from SAFE_ZONE itself: the drawn band and the clamp that
+              enforces it cannot drift apart into a band text can sit in. */}
+          <div
+            className="text-safe-zone top"
+            aria-hidden="true"
+            style={{ height: `${SAFE_ZONE.top * 100}%` }}
+          >
             <span>Stays clear of platform UI</span>
           </div>
-          <div className="text-safe-zone left" aria-hidden="true" />
-          <div className="text-safe-zone right" aria-hidden="true" />
+          <div
+            className="text-safe-zone left"
+            aria-hidden="true"
+            style={{ width: `${SAFE_ZONE.left * 100}%` }}
+          />
+          <div
+            className="text-safe-zone right"
+            aria-hidden="true"
+            style={{ width: `${SAFE_ZONE.right * 100}%` }}
+          />
           <span
             className={`centre-guide v${snapped.x ? " snapped" : ""}`}
             aria-hidden="true"

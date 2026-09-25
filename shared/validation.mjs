@@ -24,6 +24,30 @@ export const fonts = [
   "Zilla Slab",
 ];
 const unit = z.number().finite().min(0).max(1);
+// Enough to cover a handle, a logo and a face at once without turning every
+// frame of an export into a dozen separate blur passes. Kept in step with the
+// copy in lib/canvas.ts, which is what the editor's Add button reads.
+export const MAX_BLUR_REGIONS = 6;
+const blurRegionSchema = z
+  .object({
+    // Assigned by the editor so a box keeps its identity across a save while
+    // others are added or removed. Optional: boxes saved before the list
+    // existed have none, and get one the next time the editor writes them.
+    id: z.string().max(80).optional(),
+    x: unit,
+    y: unit,
+    width: unit.gt(0),
+    height: unit.gt(0),
+    intensity: z.number().min(1).max(100),
+    // Absent means "the whole clip", which is both what a box saved before
+    // blur had a timeline meant and the right default for a new one.
+    startMs: z.number().min(0).optional(),
+    endMs: z.number().positive().optional(),
+  })
+  .refine(
+    (b) => b.x + b.width <= 1.001 && b.y + b.height <= 1.001,
+    "Blur region exceeds the frame",
+  );
 export const editSchema = z.object({
   version: z.literal(1),
   canvas: z.object({
@@ -90,26 +114,21 @@ export const editSchema = z.object({
     mode: z.enum(["original", "mute", "remove-vocals", "vocals-only"]),
     derivativeId: z.string().uuid().nullable(),
   }),
-  // One rectangle of the finished 9:16 frame to blur -- x/y/width/height are
+  // Rectangles of the finished 9:16 frame to blur. x/y/width/height are
   // fractions of the CANVAS, like textOverlays and unlike crop (which selects
-  // source pixels), because what it hides is a thing the viewer sees in the
-  // final frame, wherever the footage under it happens to sit. Defaulted
-  // rather than required so every edit saved before this existed still
-  // validates as "no blur".
+  // source pixels), because what they hide is a thing the viewer sees in the
+  // final frame, wherever the footage under it happens to sit. Timing is in
+  // source coordinates, again like text, so a box stays over the thing it
+  // hides as clips are removed and restored.
   blur: z
-    .object({
-      x: unit,
-      y: unit,
-      width: unit.gt(0),
-      height: unit.gt(0),
-      intensity: z.number().min(1).max(100),
-    })
-    .refine(
-      (b) => b.x + b.width <= 1.001 && b.y + b.height <= 1.001,
-      "Blur region exceeds the frame",
+    .preprocess(
+      // A single box used to be stored as one bare object, or null for none.
+      // Both still arrive -- from projects saved before this, and from a tab
+      // that has not reloaded since -- and become a one-box list.
+      (value) => (value == null ? [] : Array.isArray(value) ? value : [value]),
+      z.array(blurRegionSchema).max(MAX_BLUR_REGIONS),
     )
-    .nullable()
-    .default(null),
+    .default([]),
 });
 export function validateEdit(raw, durationMs) {
   const spec = editSchema.parse(raw);
@@ -124,6 +143,12 @@ export function validateEdit(raw, durationMs) {
   for (const t of spec.textOverlays)
     if (t.endMs <= t.startMs || t.endMs > durationMs + 100)
       throw new Error("Text timing must be within the source.");
+  for (const b of spec.blur) {
+    const start = b.startMs ?? 0,
+      end = b.endMs ?? durationMs;
+    if (end <= start || end > durationMs + 100)
+      throw new Error("Blur timing must be within the source.");
+  }
   return spec;
 }
 export function instagramUrl(raw) {
@@ -209,7 +234,12 @@ export const templateEditSchema = z.object({
   canvas: editSchema.shape.canvas,
   crop: editSchema.shape.crop,
   textOverlays: z
-    .array(editSchema.shape.textOverlays.element.omit({ startMs: true, endMs: true }))
+    .array(
+      editSchema.shape.textOverlays.element.omit({
+        startMs: true,
+        endMs: true,
+      }),
+    )
     .max(12),
 });
 export function validateTemplate(raw) {
@@ -232,7 +262,7 @@ export function editFromTemplate(templateEdit, durationMs) {
     // Not part of a template: a blur hides something in one specific clip's
     // footage, so carrying it onto a different clip would cover whatever
     // happens to be at those coordinates there instead.
-    blur: null,
+    blur: [],
   };
 }
 export function initialEdit(durationMs) {
@@ -246,6 +276,6 @@ export function initialEdit(durationMs) {
     segments: [{ startMs: 0, endMs: durationMs, enabled: true }],
     textOverlays: [],
     audio: { mode: "original", derivativeId: null },
-    blur: null,
+    blur: [],
   };
 }

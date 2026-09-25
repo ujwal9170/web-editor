@@ -1,6 +1,11 @@
 import { cropGeometry } from "../shared/export.mjs";
-import { blurPixels } from "../shared/blur.mjs";
-import type { Edit, Overlay } from "./types";
+import { blurPixels, blurVisible } from "../shared/blur.mjs";
+import {
+  SAFE_ZONE,
+  textPositionLimits,
+  clampTextPosition,
+} from "../shared/safe-zone.mjs";
+import type { BlurRegion, Edit, Overlay } from "./types";
 // Every face the Text tab offers, with the weight it draws at when Bold is
 // off. Bold is a separate switch, so "Inter Medium" is not a weight choice
 // that Bold then contradicts -- it is the face's own weight, and Bold takes
@@ -113,10 +118,11 @@ export function background(
 // fillText (no maxWidth) sidesteps that inconsistency entirely, since plain
 // text measurement/sizing is consistent everywhere. Shared by text() and
 // measureOverlay() so the drag handle's box never disagrees with the render.
-// The bands the platforms draw their own chrome over. Text is kept out of
-// them both by the drag clamp (Editor.tsx) and by the wrap below, so the two
-// can never disagree about where the usable frame ends.
-export const SAFE_ZONE = { top: 0.07, left: 0.07, right: 0.07 };
+// The bands the platforms draw their own chrome over, and the rule that keeps
+// text out of them -- one definition (shared/safe-zone.mjs, so the tests see
+// it too) for the wrap below, the drag on the canvas and the position sliders
+// alike.
+export { SAFE_ZONE, textPositionLimits, clampTextPosition };
 // A word with no break in it that is wider than the line gets broken anyway,
 // at the last character that fits. Rare -- a pasted URL, a long hashtag -- but
 // without it such a word is the one thing that could still force the whole
@@ -213,6 +219,9 @@ export function measureOverlay(
 // CanvasImageSource, so the exact same crop/scale/overlay math produces
 // pixel-identical output whether the frame source is a <video> or a decoded
 // export frame.
+// Kept in step with the same limit in shared/validation.mjs, which is what
+// actually decides whether a saved edit is accepted.
+export const MAX_BLUR_REGIONS = 6;
 // Smallest blur box that's still grabbable by its handles on a phone.
 export const MIN_BLUR = 0.01;
 // Breadth goes much narrower than height: hiding a handle, a timestamp or a
@@ -238,17 +247,28 @@ function scratchCanvas(w: number, h: number) {
   scratch.height = h;
   return scratch;
 }
-// Blurs one rectangle of whatever is already on the canvas. Runs after the
-// frame is drawn and before any text, so it hides footage without smearing
-// the caption sitting over it.
-export function blurRegion(
+// Blurs each rectangle of whatever is already on the canvas that is due at
+// this moment. Runs after the frame is drawn and before any text, so it hides
+// footage without smearing the caption sitting over it.
+export function blurRegions(
   ctx: Context2D,
   edit: Edit,
   width: number,
   height: number,
+  currentTimeMs: number,
 ) {
-  const b = edit.blur;
-  if (!b) return;
+  for (const b of edit.blur ?? [])
+    if (blurVisible(b, currentTimeMs)) blurBox(ctx, b, width, height);
+}
+// Boxes are drawn one after another rather than blurred in a single pass:
+// each reads back the canvas as it stands, so two overlapping boxes compound
+// into a stronger blur instead of the second one undoing the first.
+function blurBox(
+  ctx: Context2D,
+  b: BlurRegion,
+  width: number,
+  height: number,
+) {
   const radius = blurRadius(b.intensity, width);
   const x = Math.round(b.x * width),
     y = Math.round(b.y * height),
@@ -308,7 +328,7 @@ export function compose(
       g.drawHeight,
     );
   }
-  blurRegion(ctx, edit, width, height);
+  blurRegions(ctx, edit, width, height, currentTimeMs);
   edit.textOverlays
     .filter((t) => currentTimeMs >= t.startMs && currentTimeMs <= t.endMs)
     .forEach((t) => text(ctx, t, width, height));

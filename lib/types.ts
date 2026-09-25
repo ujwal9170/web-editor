@@ -48,14 +48,21 @@ export type Edit = {
   textOverlays: Overlay[];
   audio: { mode: string; derivativeId: string | null };
   // Fractions of the finished canvas, not of the source -- see editSchema.
-  blur: BlurRegion | null;
+  // A list: several things in one frame can need hiding, and each box has its
+  // own span of the source timeline.
+  blur: BlurRegion[];
 };
 export type BlurRegion = {
+  // Absent on boxes saved before the list existed; the editor assigns one.
+  id?: string;
   x: number;
   y: number;
   width: number;
   height: number;
   intensity: number;
+  // Absent means the whole clip.
+  startMs?: number;
+  endMs?: number;
 };
 // Reusable style preset: crop/background/text, no timing or a specific clip.
 export type Template = {

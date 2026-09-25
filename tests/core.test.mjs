@@ -34,6 +34,7 @@ async function authorize(app, root, username = "tester") {
         : { ...options, headers: { ...options.headers, cookie } },
     );
 }
+import { blurVisible } from "../shared/blur.mjs";
 import "../public/audio/dsp.js";
 
 test("URL normalization rejects non-Instagram and credential-bearing URLs", () => {
@@ -136,14 +137,17 @@ test("download API routes all three sources to the same import queue", async () 
   }
 });
 
-test("a blur region is optional, bounded, and survives a round trip", () => {
+test("blur regions are optional, bounded, and survive a round trip", () => {
   const edit = initialEdit(10000);
   // Edits saved before blur existed carry no such key at all; they have to
   // keep validating rather than being rejected as malformed.
   const { blur, ...withoutBlur } = edit;
-  assert.equal(validateEdit(withoutBlur, 10000).blur, null);
+  assert.deepEqual(validateEdit(withoutBlur, 10000).blur, []);
+  assert.deepEqual(validateEdit({ ...edit, blur: null }, 10000).blur, []);
   const region = { x: 0.1, y: 0.2, width: 0.5, height: 0.25, intensity: 60 };
-  assert.deepEqual(validateEdit({ ...edit, blur: region }, 10000).blur, region);
+  assert.deepEqual(validateEdit({ ...edit, blur: [region] }, 10000).blur, [
+    region,
+  ]);
   for (const bad of [
     { ...region, x: 0.8, width: 0.5 },
     { ...region, y: 0.9, height: 0.5 },
@@ -151,30 +155,107 @@ test("a blur region is optional, bounded, and survives a round trip", () => {
     { ...region, intensity: 0 },
     { ...region, intensity: 101 },
   ])
-    assert.throws(() => validateEdit({ ...edit, blur: bad }, 10000));
+    assert.throws(() => validateEdit({ ...edit, blur: [bad] }, 10000));
+  // More boxes than the editor can add are refused rather than quietly
+  // trimmed: an edit that renders differently from the one that was saved is
+  // worse than one that will not save.
+  assert.throws(() =>
+    validateEdit(
+      { ...edit, blur: Array.from({ length: 7 }, () => region) },
+      10000,
+    ),
+  );
 });
-test("a blur covers the whole clip and outlives a swap to a shorter one", () => {
+test("one blur box saved before the list existed becomes a list of one", () => {
   const region = { x: 0.1, y: 0.2, width: 0.5, height: 0.25, intensity: 60 };
+  // A project saved when blur was a single object -- and a tab still open
+  // from then -- both send this shape. It has no timing of its own, which
+  // means the whole clip, so a swap to a much shorter source leaves it alone
+  // while text is re-spanned.
   const edit = { ...initialEdit(10000), blur: region };
-  // It carries no startMs/endMs of its own, unlike a text overlay -- there is
-  // no window it could fall outside of, so it is on every frame by
-  // construction rather than by being re-spanned.
-  assert.deepEqual(Object.keys(region).sort(), [
-    "height",
-    "intensity",
-    "width",
-    "x",
-    "y",
-  ]);
-  // Replacing the source clip re-spans text against the new duration; the
-  // blur needs no such treatment, so a much shorter clip must still validate
-  // with the region untouched.
+  assert.deepEqual(validateEdit(edit, 10000).blur, [region]);
   const swapped = {
     ...edit,
     segments: [{ startMs: 0, endMs: 2000, enabled: true }],
     textOverlays: [],
   };
-  assert.deepEqual(validateEdit(swapped, 2000).blur, region);
+  assert.deepEqual(validateEdit(swapped, 2000).blur, [region]);
+});
+test("each blur box keeps its own span of the source timeline", () => {
+  const edit = initialEdit(10000);
+  const region = { x: 0.1, y: 0.2, width: 0.3, height: 0.2, intensity: 40 };
+  const timed = [
+    { ...region, id: "face", startMs: 0, endMs: 4000 },
+    { ...region, id: "logo", x: 0.5, startMs: 4000, endMs: 10000 },
+  ];
+  assert.deepEqual(validateEdit({ ...edit, blur: timed }, 10000).blur, timed);
+  for (const bad of [
+    { ...region, startMs: 0, endMs: 12000 },
+    { ...region, startMs: 5000, endMs: 5000 },
+    { ...region, startMs: 6000, endMs: 3000 },
+  ])
+    assert.throws(() => validateEdit({ ...edit, blur: [bad] }, 10000));
+  // A box is drawn on the frames inside its window and nowhere else; no
+  // window at all means every frame.
+  assert.deepEqual(
+    [0, 3999, 4000, 9999].map((ms) =>
+      timed.filter((b) => blurVisible(b, ms)).map((b) => b.id),
+    ),
+    [["face"], ["face"], ["face", "logo"], ["logo"]],
+  );
+  assert.equal(blurVisible(region, 0), true);
+  assert.equal(blurVisible(region, 10_000_000), true);
+});
+test("a project saved when blur was one box still opens in the editor", async () => {
+  // Projects are handed to the editor exactly as they were stored -- only
+  // saving goes through validateEdit -- so the startup migration is the only
+  // thing standing between a legacy edit and an editor that cannot index it.
+  const root = mkdtempSync(path.join(tmpdir(), "frame-legacy-blur-"));
+  const repo = createRepository(root);
+  const owner = await createUser(repo, "legacy", "test-password-123");
+  writeFileSync(path.join(root, "source.mp4"), "fixture");
+  const media = repo.put("media", {
+    userId: owner.id,
+    name: "clip",
+    status: "ready",
+    duration: 6,
+    file: "source.mp4",
+  });
+  const region = { x: 0.1, y: 0.2, width: 0.3, height: 0.2, intensity: 50 };
+  const project = repo.put("project", {
+    userId: owner.id,
+    mediaId: media.id,
+    name: "old edit",
+    caption: "",
+    revision: 4,
+    edit: { ...initialEdit(6000), blur: region },
+  });
+  repo.close();
+  const app = await createApp({
+    dataDir: root,
+    queueFactory: () => ({ add: () => ({}) }),
+  });
+  try {
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth",
+      payload: { username: "legacy", password: "test-password-123" },
+    });
+    const opened = (
+      await app.inject({
+        url: `/api/projects/${project.id}`,
+        headers: { cookie: login.headers["set-cookie"].split(";")[0] },
+      })
+    ).json();
+    assert.deepEqual(opened.edit.blur, [region]);
+    // The stored edit changed shape, so its revision moves with it: a tab
+    // still holding revision 4 must be told to reopen rather than saving over
+    // the migration.
+    assert.equal(opened.revision, 5);
+  } finally {
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 test("an edit written with a font that no longer exists still opens", () => {
   // The Text tab dropped DM Sans, Montserrat and Roboto. A project saved with
@@ -600,7 +681,7 @@ test("STFT/ISTFT preserves stereo low-frequency signal and sample alignment", ()
   assert.equal(wav.getUint16(22, true), 2);
 });
 
-test("legacy server-render requests cannot enqueue a CPU render", async () => {
+test("a server render queues the video work with the browser's own artwork", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "frame-render-"));
   const queued = [];
   const repo = createRepository(root);
@@ -628,6 +709,9 @@ test("legacy server-render requests cannot enqueue a CPU render", async () => {
     { ...overlay, id: "a", text: "Hello", startMs: 0, endMs: 2000 },
     { ...overlay, id: "b", text: "   ", startMs: 1000, endMs: 6000 },
   ];
+  edit.blur = [
+    { id: "b1", x: 0.1, y: 0.2, width: 0.3, height: 0.2, intensity: 60, startMs: 0, endMs: 4000 },
+  ];
   const project = repo.put("project", {
     userId: owner.id,
     mediaId: media.id,
@@ -653,19 +737,48 @@ test("legacy server-render requests cannot enqueue a CPU render", async () => {
   const cookie = login.headers["set-cookie"].split(";")[0];
   const inject = (options) => app.inject({ ...options, headers: { cookie } });
   const png = "data:image/png;base64," + Buffer.from("png").toString("base64");
-  const render = (overlays) =>
+  const render = (overlays, body = {}) =>
     inject({
       method: "POST",
       url: `/api/projects/${project.id}/renders`,
-      payload: { revision: 1, background: png, overlays },
+      payload: { revision: 1, background: png, overlays, ...body },
     });
   try {
     const response = await render([
       { png, x: 240, y: 280 },
       { png: null, x: 0, y: 0 },
     ]);
-    assert.equal(response.statusCode, 410);
-    assert.equal(queued.length, 0);
+    assert.equal(response.statusCode, 202);
+    assert.equal(queued.length, 1);
+    const job = queued[0];
+    assert.equal(job.action, "render");
+    assert.equal(job.input, "source.mp4");
+    assert.equal(job.quality, "1080p");
+    // Blank text sends no PNG and never becomes a composite pass; the one
+    // that draws carries the SERVER's timings, not the browser's.
+    assert.equal(job.overlays.length, 1);
+    assert.deepEqual(
+      { x: job.overlays[0].x, y: job.overlays[0].y, startMs: job.overlays[0].startMs, endMs: job.overlays[0].endMs },
+      { x: 240, y: 280, startMs: 0, endMs: 2000 },
+    );
+    // The artwork is on disk for the worker, and the blur list travels in the
+    // validated spec rather than being redrawn by the browser.
+    assert.equal(existsSync(path.join(root, job.background)), true);
+    assert.equal(existsSync(path.join(root, job.overlays[0].file)), true);
+    assert.deepEqual(job.spec.blur, [
+      { id: "b1", x: 0.1, y: 0.2, width: 0.3, height: 0.2, intensity: 60, startMs: 0, endMs: 4000 },
+    ]);
+    // A stale revision, a mismatched overlay count and artwork that is not a
+    // PNG are all refused before anything is queued.
+    for (const [overlays, body] of [
+      [[{ png, x: 0, y: 0 }, { png: null, x: 0, y: 0 }], { revision: 7 }],
+      [[{ png, x: 0, y: 0 }], {}],
+      [[{ png, x: 0, y: 0 }, { png: null, x: 0, y: 0 }], { background: "data:image/gif;base64,AA==" }],
+    ]) {
+      const refused = await render(overlays, body);
+      assert.equal(refused.statusCode, 400);
+    }
+    assert.equal(queued.length, 1);
   } finally {
     await app.close();
     repo.close();

@@ -83,6 +83,93 @@ class OverlayCompositingTests(unittest.TestCase):
         self.assertEqual(media.overlay_filters([]), ([], 'base0'))
 
 
+class BlurCompositingTests(unittest.TestCase):
+    def test_each_box_blurs_its_own_rectangle_over_its_own_span(self):
+        # The split is not optional: a filter output may be consumed once, and
+        # every box both reads the frame and draws back onto it.
+        filters, last = media.blur_filters([
+            {'x': 0.1, 'y': 0.2, 'width': 0.5, 'height': 0.25, 'intensity': 50, 'startMs': 0, 'endMs': 3000},
+            {'x': 0.5, 'y': 0.5, 'width': 0.25, 'height': 0.25, 'intensity': 20, 'startMs': 3000, 'endMs': 6000},
+        ], 1080, 1920)
+        self.assertEqual(last, 'blurred1')
+        self.assertEqual(filters, [
+            '[base0]split=2[bs0a][bs0b]',
+            '[bs0a]crop=540:480:108:384,boxblur=37:3[bb0]',
+            "[bs0b][bb0]overlay=108:384:enable='between(t,0.0,3.0)'[blurred0]",
+            '[blurred0]split=2[bs1a][bs1b]',
+            '[bs1a]crop=270:480:540:960,boxblur=15:3[bb1]',
+            "[bs1b][bb1]overlay=540:960:enable='between(t,3.0,6.0)'[blurred1]",
+        ])
+
+    def test_a_box_with_no_timing_is_on_every_frame(self):
+        # What every box saved before blur had a timeline meant, and what the
+        # preview draws for one: no enable expression at all.
+        filters, _ = media.blur_filters(
+            [{'x': 0, 'y': 0, 'width': 0.2, 'height': 0.2, 'intensity': 100}], 1080, 1920)
+        self.assertNotIn('enable', filters[-1])
+        self.assertTrue(filters[-1].endswith('overlay=0:0[blurred0]'))
+
+    def test_the_radius_never_exceeds_what_it_is_blurring(self):
+        # boxblur rejects a radius larger than half the box, which a thin
+        # watermark strip at full intensity would otherwise ask for.
+        filters, _ = media.blur_filters(
+            [{'x': 0, 'y': 0, 'width': 0.02, 'height': 0.02, 'intensity': 100}], 1080, 1920)
+        crop = [f for f in filters if 'crop=' in f][0]
+        width, height = 22, 38
+        radius = int(crop.split('boxblur=')[1].split(':')[0])
+        self.assertLessEqual(radius, min(width, height) // 2)
+        self.assertGreaterEqual(radius, 1)
+
+    def test_a_project_without_blur_leaves_the_base_untouched(self):
+        self.assertEqual(media.blur_filters([], 1080, 1920), ([], 'base0'))
+
+    def test_blur_geometry_cannot_inject_filter_syntax(self):
+        with self.assertRaises(ValueError):
+            media.blur_filters(
+                [{'x': "0[x];drawbox", 'y': 0, 'width': 0.2, 'height': 0.2, 'intensity': 50}], 1080, 1920)
+
+    def test_text_is_composited_over_the_blur_not_under_it(self):
+        # Draw order has to match the preview and the on-device export: blur
+        # hides footage, then text sits on top of it, sharp.
+        blurred, previous = media.blur_filters(
+            [{'x': 0, 'y': 0, 'width': 0.2, 'height': 0.2, 'intensity': 50}], 1080, 1920)
+        overlays, last = media.overlay_filters(
+            [{'file': 'a.png', 'x': 0, 'y': 0, 'startMs': 0, 'endMs': 1000}], previous)
+        self.assertEqual(previous, 'blurred0')
+        self.assertTrue(overlays[0].startswith('[blurred0]'))
+        self.assertEqual(last, 'base1')
+
+
+class CpuShareTests(unittest.TestCase):
+    def test_the_api_decides_how_many_threads_ffmpeg_may_use(self):
+        # Left alone FFmpeg takes every core, and on a box that is also serving
+        # the app that means one render makes everything else wait.
+        try:
+            with patch.object(media, 'import_media', return_value={'ok': True}):
+                with redirect_stdout(io.StringIO()):
+                    media.execute({'action': 'import', 'root': '.', 'threads': 3})
+            self.assertEqual(media.THREADS, 3)
+            self.assertEqual(media.thread_flags(), ['-threads', '3'])
+            recorded = []
+            with patch.object(media.subprocess, 'run', side_effect=lambda args, **kw: recorded.append(args) or SimpleNamespace(returncode=0, stderr='')):
+                media.run(['-i', 'in.mp4', 'out.mp4'])
+            # Once before the input, capping the decoder, and once immediately
+            # before the output, which is the only position the encoder reads.
+            # In front of the whole command line x264 ignores it and opens a
+            # thread per core anyway.
+            self.assertEqual(recorded[0][-3:], ['-threads', '3', 'out.mp4'])
+            self.assertEqual(recorded[0].count('-threads'), 2)
+            self.assertLess(recorded[0].index('-threads'), recorded[0].index('-i'))
+            # Nothing outside the API sets an allowance, and then the flag is
+            # left off entirely rather than guessed at.
+            with patch.object(media, 'import_media', return_value={'ok': True}):
+                with redirect_stdout(io.StringIO()):
+                    media.execute({'action': 'import', 'root': '.'})
+            self.assertEqual(media.thread_flags(), [])
+        finally:
+            media.THREADS = 0
+
+
 class DeviceAcceptTests(unittest.TestCase):
     def test_probe_recognizes_mp4_h264_aac(self):
         stderr = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'x':\nDuration: 00:00:04.00\nStream #0:0: Video: h264 (High), yuv420p, 720x1280, 30 fps\nStream #0:1: Audio: aac (LC), 48000 Hz"

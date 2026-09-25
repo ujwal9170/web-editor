@@ -4,9 +4,17 @@ import path from "node:path";
 import assert from "node:assert/strict";
 const base = process.env.SMOKE_ORIGIN || "http://127.0.0.1:4174";
 if (!process.env.SMOKE_USERNAME || !process.env.SMOKE_PASSWORD)
-  throw new Error("Set SMOKE_USERNAME and SMOKE_PASSWORD for an existing disposable QA account.");
-const login = await fetch(base + "/api/auth", { method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ username: process.env.SMOKE_USERNAME, password: process.env.SMOKE_PASSWORD }) });
+  throw new Error(
+    "Set SMOKE_USERNAME and SMOKE_PASSWORD for an existing disposable QA account.",
+  );
+const login = await fetch(base + "/api/auth", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    username: process.env.SMOKE_USERNAME,
+    password: process.env.SMOKE_PASSWORD,
+  }),
+});
 if (!login.ok) throw new Error("QA account login failed.");
 const cookie = login.headers.get("set-cookie").split(";")[0];
 const python =
@@ -22,7 +30,10 @@ const fixture = spawnSync(python, ["worker/fixture.py", "work-test"], {
 });
 if (fixture.status) throw new Error(fixture.stderr);
 async function api(route, opts = {}) {
-  const r = await fetch(base + "/api" + route, { ...opts, headers: { ...opts.headers, cookie } });
+  const r = await fetch(base + "/api" + route, {
+    ...opts,
+    headers: { ...opts.headers, cookie },
+  });
   const body = await r.json();
   if (!r.ok) throw new Error(JSON.stringify(body));
   return body;
@@ -72,10 +83,27 @@ p.edit.textOverlays = [
     size: 48,
     color: "#FFFFFF",
     x: 0.5,
-    y: 0.1,
+    // Clear of the top band the editor reserves for platform chrome
+    // (SAFE_ZONE in shared/safe-zone.mjs).
+    y: 0.5,
     startMs: 0,
     endMs: 6000,
   },
+];
+// Two boxes, one timed and one for the whole clip, so the server render below
+// exercises the blur chain rather than only crop/text/cuts.
+p.edit.blur = [
+  {
+    id: "qa-face",
+    x: 0.1,
+    y: 0.15,
+    width: 0.4,
+    height: 0.2,
+    intensity: 60,
+    startMs: 0,
+    endMs: 2000,
+  },
+  { id: "qa-logo", x: 0.6, y: 0.7, width: 0.3, height: 0.15, intensity: 25 },
 ];
 const saved = await api(`/projects/${p.id}`, {
   method: "PATCH",
@@ -100,14 +128,73 @@ const conflict = await fetch(base + `/api/projects/${p.id}`, {
 assert.equal(conflict.status, 409);
 for (const quality of ["720p", "1080p"]) {
   const { ticketId } = await api(`/projects/${p.id}/renders/device/prepare`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ revision: saved.revision, quality }),
   });
   await api(`/device-exports/${ticketId}`, { method: "DELETE" });
 }
-const disabled = await fetch(base + `/api/projects/${p.id}/renders`, { method: "POST", headers: { cookie } });
-assert.equal(disabled.status, 410);
-console.log(JSON.stringify({ passed: true, mediaId: media.id, projectId: p.id,
-  checks: ["authenticated upload", "normalize", "range playback", "revision conflict", "720p/1080p snapshots", "server rendering disabled"],
-  next: "Open the QA edit in the browser. Export both resolutions, navigate to another edit while rendering, and test Cancel. This Node script does not exercise browser codecs."
-}, null, 2));
+// A real server render, with the artwork the browser would normally draw
+// standing in as the fixture's PNGs. This is the one path a Node script can
+// exercise all the way to a finished MP4 -- on-device export needs codecs only
+// a browser has.
+const artwork = async (file) =>
+  "data:image/png;base64," +
+  (await readFile("work-test/" + file)).toString("base64");
+const stale = await fetch(base + `/api/projects/${p.id}/renders`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", cookie },
+  body: JSON.stringify({
+    revision: saved.revision - 1,
+    background: await artwork("background.png"),
+    overlays: [{ png: await artwork("overlay.png"), x: 0, y: 0 }],
+  }),
+});
+assert.equal(stale.status, 400);
+const rendering = await api(`/projects/${p.id}/renders`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    revision: saved.revision,
+    quality: "1080p",
+    background: await artwork("background.png"),
+    overlays: [{ png: await artwork("overlay.png"), x: 0, y: 0 }],
+  }),
+});
+assert.equal(rendering.job.type, "render");
+const rendered = await wait(rendering.job.id);
+const output = (await api("/exports")).find((x) => x.id === rendered.resultId);
+assert.ok(output, "server render produced no export");
+assert.equal(output.renderedOnDevice, false);
+assert.equal(output.width, 1080);
+assert.equal(output.height, 1920);
+// The middle segment is disabled, so four of the six seconds survive.
+assert.ok(Math.abs(output.duration - 4) < 0.3, `rendered ${output.duration}s`);
+assert.equal(output.edit.blur.length, 2);
+const playback = await fetch(base + `/api/files/export/${output.id}/file`, {
+  headers: { Range: "bytes=0-99", cookie },
+});
+assert.equal(playback.status, 206);
+console.log(
+  JSON.stringify(
+    {
+      passed: true,
+      mediaId: media.id,
+      projectId: p.id,
+      exportId: output.id,
+      checks: [
+        "authenticated upload",
+        "normalize",
+        "range playback",
+        "revision conflict",
+        "720p/1080p snapshots",
+        "stale-revision render refused",
+        "server render with two blur boxes",
+        "rendered export plays back",
+      ],
+      next: "Open the QA edit in the browser. Export both resolutions on the device, navigate to another edit while rendering, and test Cancel. This Node script does not exercise browser codecs.",
+    },
+    null,
+    2,
+  ),
+);

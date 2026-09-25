@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import multipart from "@fastify/multipart";
 import staticPlugin from "@fastify/static";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -67,12 +67,26 @@ export async function createApp({
       else preparingProjects.delete(id);
     }
   };
-  // One-time migration for development projects saved before Reel-only canvases.
+  // One-time migrations for projects saved under an older shape of the edit.
+  // A project is handed to the editor exactly as it was stored -- only saving
+  // goes through validateEdit -- so anything the editor would choke on has to
+  // be fixed here rather than on read.
   for (const project of repo.list("project")) {
-    if (project.edit?.canvas?.aspectRatio !== "9:16") {
-      project.edit.canvas.aspectRatio = "9:16";
-      repo.put("project", { ...project, revision: project.revision + 1 });
+    const edit = project.edit;
+    let changed = false;
+    if (edit?.canvas?.aspectRatio !== "9:16") {
+      edit.canvas.aspectRatio = "9:16";
+      changed = true;
     }
+    // Blur was one box, stored as a bare object (or null). It is a list now,
+    // and the editor indexes it: an object here would be an editor that
+    // cannot open the project at all.
+    if (!Array.isArray(edit?.blur)) {
+      edit.blur = edit?.blur ? [edit.blur] : [];
+      changed = true;
+    }
+    if (changed)
+      repo.put("project", { ...project, revision: project.revision + 1 });
   }
   const app = Fastify({ logger, bodyLimit: 24 * 1024 * 1024 });
   // Strict, fixed retention. A source is deleted this long after it was
@@ -748,11 +762,148 @@ export async function createApp({
       return reply.code(202).send({ job: withQueue(job) });
     }),
   );
-  // Rendering is device-only. Retire the old CPU-heavy endpoint explicitly.
-  app.post("/api/projects/:id/renders", (req, reply) =>
-    reply
-      .code(410)
-      .send({ error: "Server rendering is disabled. Export on this device." }),
+  // Server-side rendering, alongside the on-device path rather than instead of
+  // it: a phone that cannot run WebCodecs, or a long edit someone would rather
+  // not babysit in a tab, hands the work to the box here. The browser still
+  // draws the background and the text, because they have to look exactly the
+  // way the preview drew them; FFmpeg does the video, the cuts, the blur and
+  // the audio. One render runs at a time and its FFmpeg is capped well below
+  // the whole machine (server/jobs.mjs), so the app stays responsive while it
+  // works.
+  //
+  // The artwork arrives as PNG data URLs in one JSON body. These ceilings
+  // leave room for a full-canvas background plus a dozen cropped text boxes;
+  // ARTWORK_BUDGET keeps the combined payload bounded whatever the mix.
+  const ARTWORK_MAX_CHARS = 12_000_000;
+  const ARTWORK_BUDGET = 56_000_000;
+  const ARTWORK_BODY_LIMIT = 64 * 1024 * 1024;
+  app.post(
+    "/api/projects/:id/renders",
+    { bodyLimit: ARTWORK_BODY_LIMIT },
+    projectOperation(async (req, reply) => {
+      const project = get("project", req.params.id, req),
+        media = mediaReady(project.mediaId, req);
+      // A render writes a whole new MP4, and nothing is lost by refusing it
+      // now rather than failing part-written later.
+      await requireRoom();
+      const spec = validateEdit(project.edit, media.duration * 1000);
+      const enabledDuration = spec.segments
+        .filter((s) => s.enabled)
+        .reduce((t, s) => t + s.endMs - s.startMs, 0);
+      if (enabledDuration < 3000)
+        throw new Error("Keep at least 3 seconds for export.");
+      const data = z
+        .object({
+          revision: z.number().int(),
+          quality: z.enum(["1080p", "720p"]).default("1080p"),
+          background: z.string().max(ARTWORK_MAX_CHARS),
+          overlays: z
+            .array(
+              z.object({
+                png: z.string().max(ARTWORK_MAX_CHARS).nullable(),
+                x: z.number().int().min(0).max(1080),
+                y: z.number().int().min(0).max(1920),
+              }),
+            )
+            .max(12),
+        })
+        .parse(req.body);
+      if (data.revision !== project.revision)
+        throw new Error("Save the latest edit before rendering.");
+      if (data.overlays.length !== spec.textOverlays.length)
+        throw new Error("Overlay count does not match project.");
+      const total = data.overlays.reduce(
+        (sum, o) => sum + (o.png?.length || 0),
+        data.background.length,
+      );
+      if (total > ARTWORK_BUDGET)
+        throw new Error(
+          "This artwork is too large to render. Use fewer or smaller image overlays.",
+        );
+      const id = randomUUID();
+      const files = [];
+      const writeArtwork = async (png, file) => {
+        if (!png.startsWith("data:image/png;base64,"))
+          throw new Error("Expected PNG artwork.");
+        await writeFile(
+          path.join(root, file),
+          Buffer.from(png.split(",")[1], "base64"),
+        );
+        files.push(file);
+      };
+      const clean = async () => {
+        for (const f of files) await rm(path.join(root, f), { force: true });
+      };
+      const backgroundFile = `${id}-art-bg.png`;
+      // Overlays arrive cropped to their drawn area; blank text sends no PNG
+      // at all, so it never becomes a composite pass. Timings stay on the
+      // server's validated spec rather than the client's payload.
+      const overlays = [];
+      try {
+        await writeArtwork(data.background, backgroundFile);
+        for (const [i, o] of data.overlays.entries()) {
+          if (o.png === null) continue;
+          const file = `${id}-art-${i}.png`;
+          await writeArtwork(o.png, file);
+          overlays.push({
+            file,
+            x: o.x,
+            y: o.y,
+            startMs: spec.textOverlays[i].startMs,
+            endMs: spec.textOverlays[i].endMs,
+          });
+        }
+      } catch (error) {
+        // Rejected artwork must not leave half-written PNGs behind.
+        await clean();
+        throw error;
+      }
+      let audioFile = null;
+      if (["remove-vocals", "vocals-only"].includes(spec.audio.mode)) {
+        const audio = get("audio", spec.audio.derivativeId, req);
+        if (audio.projectId !== project.id || audio.status !== "ready")
+          throw new Error("Apply processed audio first.");
+        audioFile = audio.file;
+      }
+      const job = queue.add(
+        "render",
+        {
+          action: "render",
+          projectId: project.id,
+          mediaId: media.id,
+          userId: req.userId,
+          root,
+          id,
+          input: media.file,
+          spec,
+          quality: data.quality,
+          audioFile,
+          background: backgroundFile,
+          overlays,
+        },
+        async (result) => {
+          const createdAt = Date.now();
+          repo.put("export", {
+            id,
+            userId: req.userId,
+            projectId: project.id,
+            name: project.name,
+            caption: project.caption,
+            edit: spec,
+            quality: data.quality,
+            renderedOnDevice: false,
+            createdAt,
+            expiresAt: createdAt + ttl,
+            ...result,
+          });
+          await clean();
+          storage.invalidate();
+          return id;
+        },
+        clean,
+      );
+      return reply.code(202).send({ job: withQueue(job) });
+    }),
   );
   app.post("/api/projects/:id/renders/device/prepare", (req) => {
     const project = get("project", req.params.id, req);

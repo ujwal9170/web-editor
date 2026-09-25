@@ -1,3 +1,11 @@
+// True while a blur box should be on screen. Missing timings mean the whole
+// clip, which is what every box saved before blur had a timeline meant.
+export function blurVisible(region, currentTimeMs) {
+  return (
+    currentTimeMs >= (region.startMs ?? 0) &&
+    currentTimeMs <= (region.endMs ?? Number.POSITIVE_INFINITY)
+  );
+}
 // Separable, edge-clamped box passes approximate a Gaussian without Canvas
 // filter support. Runtime is linear in pixel count, not blur radius.
 export function blurPixels(data, width, height, radius) {

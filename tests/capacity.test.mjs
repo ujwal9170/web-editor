@@ -10,8 +10,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { createRepository } from "../server/repository.mjs";
-import { createQueue } from "../server/jobs.mjs";
+import { createQueue, threadBudget } from "../server/jobs.mjs";
 import { createUser } from "../server/users.mjs";
 import { createApp } from "../server/app.mjs";
 import { createStorage } from "../server/storage.mjs";
@@ -84,7 +85,9 @@ test("the server runs a fixed number of media jobs and queues the rest in order"
   // The limit is the whole point: a third download does not get to compete
   // for the same CPU and disk as the two already running.
   assert.equal(started.length, 2);
-  assert.deepEqual(queue.stats(), { limit: 2, running: 2, waiting: 2 });
+  assert.equal(queue.stats().limit, 2);
+  assert.equal(queue.stats().running, 2);
+  assert.equal(queue.stats().waiting, 2);
   assert.equal(queue.position(jobs[2].id), 1);
   assert.equal(queue.position(jobs[3].id), 2);
   // A running job has no position; that is what separates "started" from
@@ -103,6 +106,105 @@ test("the server runs a fixed number of media jobs and queues the rest in order"
   started[3].finish();
   await until(() => queue.stats().running === 0, "the queue to drain");
   for (const job of jobs) assert.equal(repo.get("job", job.id).status, "ready");
+});
+
+test("only one video renders at a time, without holding up anything else", async (t) => {
+  const box = sandbox(t);
+  const root = box.dir("frame-render-queue-");
+  const repo = box.closing(createRepository(root));
+  const started = [];
+  const queue = createQueue(repo, root, {
+    limit: 2,
+    spawn: fakeSpawn(started),
+  });
+  const first = queue.add("render", { userId: "owner" }, async () => "1");
+  const second = queue.add("render", { userId: "owner" }, async () => "2");
+  const download = queue.add("import", { userId: "owner" }, async () => "3");
+  // Rendering pins its threads for minutes, so the second one waits -- but the
+  // import behind it is stepped over rather than stuck behind the render, or
+  // nobody could bring a clip in while someone else exports.
+  await until(() => started.length === 2, "the render and the import to start");
+  assert.equal(queue.stats().running, 2);
+  assert.equal(repo.get("job", first.id).status, "running");
+  assert.equal(repo.get("job", second.id).status, "queued");
+  assert.equal(repo.get("job", download.id).status, "running");
+  assert.equal(queue.position(second.id), 1);
+  started[0].finish();
+  await until(() => started.length === 3, "the second render to take its turn");
+  assert.equal(repo.get("job", second.id).status, "running");
+  for (const proc of started.slice(1)) proc.finish();
+  await until(() => queue.stats().running === 0, "the queue to drain");
+});
+
+test("FFmpeg is given a share of the machine, not all of it", async (t) => {
+  // The box serves the app as well as rendering on it. Every slot the queue
+  // can fill comes out of the same allowance, so the ceiling holds however
+  // many jobs happen to be running.
+  const share = process.env.MEDIA_CPU_SHARE;
+  delete process.env.MEDIA_CPU_SHARE;
+  t.after(() => {
+    if (share === undefined) delete process.env.MEDIA_CPU_SHARE;
+    else process.env.MEDIA_CPU_SHARE = share;
+  });
+  for (const cores of [4, 8, 16, 32]) {
+    // A render runs alone and gets the whole allowance -- the 70-80% of the
+    // machine this ceiling is for.
+    const render = threadBudget(1, cores);
+    assert.ok(render <= cores * 0.8, render + " threads of " + cores + " cores");
+    assert.ok(render >= cores * 0.6, render + " threads of " + cores + " cores");
+    // The lighter jobs run two at a time and split the same allowance.
+    const total = threadBudget(2, cores) * 2;
+    assert.ok(total <= cores * 0.8, total + " threads of " + cores + " cores");
+    assert.ok(total >= cores * 0.5, total + " threads of " + cores + " cores");
+  }
+  // A machine too small to divide still gets a thread: FFmpeg cannot run on
+  // less, and refusing to render at all would be worse than the overshoot.
+  assert.equal(threadBudget(2, 1), 1);
+  process.env.MEDIA_CPU_SHARE = "0.5";
+  assert.equal(threadBudget(1, 8), 4);
+  // The worker is told its allowance in the job file it reads, so it never has
+  // to guess how many jobs are sharing the machine.
+  const box = sandbox(t);
+  const root = box.dir("frame-threads-");
+  const repo = box.closing(createRepository(root));
+  const started = [];
+  const queue = createQueue(repo, root, {
+    limit: 2,
+    threads: 3,
+    spawn: fakeSpawn(started),
+  });
+  const job = queue.add(
+    "render",
+    { action: "render", userId: "owner" },
+    async () => "1",
+  );
+  await until(() => started.length === 1, "the render to start");
+  const spec = JSON.parse(
+    readFileSync(path.join(root, job.id + ".job.json"), "utf8"),
+  );
+  assert.equal(spec.threads, 3);
+  assert.equal(spec.action, "render");
+  assert.equal(queue.stats().threads, 3);
+  started[0].finish();
+  await until(() => queue.stats().running === 0, "the queue to drain");
+  // The two allowances are separate, and the worker is handed the one that
+  // matches the job in front of it rather than a single number for everything.
+  const split = createQueue(repo, root, {
+    limit: 2,
+    threads: 2,
+    renderThreads: 6,
+    spawn: fakeSpawn(started),
+  });
+  const light = split.add("import", { action: "import" }, async () => "2");
+  const heavy = split.add("render", { action: "render" }, async () => "3");
+  await until(() => started.length === 3, "both jobs to start");
+  const allowance = (id) =>
+    JSON.parse(readFileSync(path.join(root, id + ".job.json"), "utf8")).threads;
+  assert.equal(allowance(light.id), 2);
+  assert.equal(allowance(heavy.id), 6);
+  assert.equal(split.stats().renderThreads, 6);
+  for (const proc of started.slice(1)) proc.finish();
+  await until(() => split.stats().running === 0, "the split queue to drain");
 });
 
 test("a waiting job reports its place in line through the API", async (t) => {

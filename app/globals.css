@@ -1614,21 +1614,18 @@ header {
   justify-content: center;
   padding-bottom: 4px;
 }
-/* Percentages here must match SAFE_ZONE in Editor.tsx -- the band is the
-   drawn half of the same rule the drag clamp enforces. */
+/* Each band's depth is set inline from SAFE_ZONE (lib/canvas.ts), the same
+   constant the drag clamp enforces, so the two cannot drift apart. */
 .text-safe-zone.top {
   inset: 0 0 auto 0;
-  height: 7%;
   border-bottom: 1.5px dashed #facc15;
 }
 .text-safe-zone.left {
   inset: 0 auto 0 0;
-  width: 7%;
   border-right: 1.5px dashed #facc15;
 }
 .text-safe-zone.right {
   inset: 0 0 0 auto;
-  width: 7%;
   border-left: 1.5px dashed #facc15;
 }
 .text-safe-zone span {
@@ -2046,10 +2043,21 @@ header {
   padding: 0;
   border: 0;
 }
-.text-card {
+/* One card per text overlay, and per blur box -- both are lists of the same
+   shape now, so they read the same in the panel. */
+.text-card,
+.blur-card {
   border-top: 1px solid var(--line);
   margin-top: 20px;
   padding-top: 2px;
+}
+.blur-card .row:first-child {
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+.blur-card .row:first-child strong {
+  font-size: 13px;
 }
 /* The rendered overlay is always center-aligned (lib/canvas.ts draws every
    line centered on t.x) -- left-aligned default textarea styling made each
@@ -2061,12 +2069,14 @@ header {
 /* Marks which text a canvas tap (or focusing one of its own fields)
    selected, since with several overlays it's otherwise not obvious which
    card belongs to the one you just tapped on the video. */
-.text-card.selected {
+.text-card.selected,
+.blur-card.selected {
   border-top-color: var(--accent);
   box-shadow: -3px 0 0 var(--accent);
   padding-left: 10px;
 }
-.text-card .row input {
+.text-card .row input,
+.blur-card .row input[type="number"] {
   padding: 8px;
   width: 100%;
 }

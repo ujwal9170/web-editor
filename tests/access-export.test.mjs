@@ -64,7 +64,7 @@ test("CLI account deletion and password change revoke already logged-in sessions
     401,
   );
 });
-test("snapshot export survives later edits, remains private, and never invokes a server render", async (t) => {
+test("snapshot export survives later edits and remains private", async (t) => {
   const f = await fixture(t);
   writeFileSync(path.join(f.root, "source.mp4"), "test-only");
   const media = f.repo.put("media", {
@@ -83,7 +83,10 @@ test("snapshot export survives later edits, remains private, and never invokes a
     revision: 1,
   });
   const base = `/api/projects/${project.id}/renders`;
-  assert.equal((await f.request(base, "POST", {})).statusCode, 410);
+  // A server render needs the browser's artwork. An empty body is a bad
+  // request, not a queued job that would render a blank frame.
+  assert.equal((await f.request(base, "POST", {})).statusCode, 400);
+  assert.equal(f.submitted.length, 0);
   const prepared = await f.request(`${base}/device/prepare`, "POST", {
     revision: 1,
     quality: "720p",

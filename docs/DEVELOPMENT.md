@@ -16,7 +16,8 @@
 
 ## Known development limits
 
-- One media worker process per job, two jobs at a time (`MEDIA_JOB_CONCURRENCY`), in a single in-memory queue that is lost on restart: waiting and running jobs are failed with "Server restarted" rather than resumed. Password sessions are in memory and also end at restart.
+- One media worker process per job, two jobs at a time (`MEDIA_JOB_CONCURRENCY`) and at most one video render among them, in a single in-memory queue that is lost on restart: waiting and running jobs are failed with "Server restarted" rather than resumed. Password sessions are in memory and also end at restart.
+- FFmpeg's thread count is the only CPU control (`MEDIA_CPU_SHARE`: a render gets the whole share, the lighter jobs split it). `-threads` is passed twice per command, before the input and before the output, because at the front it caps decoding only and x264 goes on opening a thread per core. It still does not bound yt-dlp or muxing overhead, so treat 0.75 as "most of the machine, not all of it" rather than a measured percentage. No cgroup, nice level or priority class is involved.
 - Browser inference is device-dependent and does not use the hosting machine's GPU. A WebGPU provider preference does not prove every model operator ran on GPU.
 - Audio separation does two inference passes; test on real vocal/music mixtures and multiple devices before calling its quality production-ready.
 - The pinned model parameters came from the user's existing tested prototype. Windowing, compensation and edge handling should be compared against that implementation with identical audio fixtures.

@@ -2,7 +2,7 @@
 
 A modular Instagram, YouTube and TikTok video workspace: import a clip and caption, keep it in Media, edit it, and save a Reel-format MP4 plus its post caption in Edited Videos.
 
-**Status: runnable development version.** Per-user private workspaces are implemented. Production cloud services and AI caption generation are still deferred. Exports are device-only; see [device exports and testing](docs/DEVICE_EXPORTS.md).
+**Status: runnable development version.** Per-user private workspaces are implemented. Production cloud services and AI caption generation are still deferred. Exports run on the device or on the server, chosen per export; see [device exports and testing](docs/DEVICE_EXPORTS.md).
 
 ## Run locally
 
@@ -48,12 +48,15 @@ Optional settings are documented in `.env.example`. Copy it to `.env` when overr
 - Editor library cards show source thumbnails and allow deleting a saved edit without deleting its source or exported videos. Deleting Media with linked edits requires explicit confirmation of the current edit count; it removes those drafts and processed stems, while exports stay available. Active render/audio jobs block deletion until they finish.
 - Generated leading `Video by` text is removed from imported names and existing Media, project and export names; captions and custom non-prefixed titles are preserved.
 - Fixed 9:16 Reel canvas (1080×1920), fill-frame crop, adjustable crop and fit-full-video.
-- Text overlays with four bundled fonts, five text colors, positions, sizes and source-timeline timing.
+- Text overlays with bundled fonts, approved text colors, positions, sizes and source-timeline timing. The top 13% of the frame is reserved for the platforms' own chrome: the drag, the position sliders and any change that grows a block all keep text out of it, and the band is drawn on the preview while a caption is being moved.
 - Five background swatches, custom HTML color input, and two/three-color gradients.
 - Timeline split, disable/delete and restore; export skips disabled segments. Timings remain in source coordinates.
+- Up to six blur boxes per edit, each with its own span of the source timeline, dragged and resized on the preview. Overlapping boxes compound. Preview, on-device export and server render place them identically, and text is always drawn over them.
 - Original audio, mute, Kim Vocal 2 vocal isolation and instrumental residual (`original - estimated vocals`), preview and apply.
 - Browser audio processing: WebGPU preferred, WASM fallback (up to four threads with cross-origin isolation), exact 7680-point FFT, 44.1 kHz stereo, fixed model tensor, two-pass denoise and overlap-add. All DSP runs in a dedicated Worker; browser decoding precedes the Worker.
-- Device-only MP4 export: 720p/1080p, H.264/AAC, 30 fps, crop/background/text/cuts, original/mute/applied processed audio. A dedicated browser worker and app-wide queue let employees edit another video during export, with progress and cancellation. No server-render option or fallback; the server only validates and stores the finished video and generates a thumbnail.
+- MP4 export at 720p/1080p, H.264/AAC, 30 fps, with crop/background/text/blur/cuts and original/mute/applied processed audio — on this device or on the server, chosen per export.
+- On-device export (the default) runs in a dedicated browser worker through an app-wide queue, so employees can edit another video while one renders, with progress and cancellation. The server only validates and stores the finished file. It needs HTTPS and a WebCodecs browser; where that is missing, the editor preselects the server.
+- Server export renders with FFmpeg from the browser's own background/text artwork, so the frame matches the preview. One video renders at a time and gets `MEDIA_CPU_SHARE` of the cores (default 0.75) rather than every one of them — capped on both the decoder and the encoder, which is the only position x264 honours. Imports and other light jobs split the same share between them and still start while a render runs. Closing the tab does not cancel a render; the finished video appears in Edited videos either way.
 - Export library with playback, full caption preview, a top Copy caption button with success feedback, video/caption downloads and deletion. Empty captions disable copying; blocked clipboard access selects the text for manual copying. Source/project stay intact when deleting an export.
 
 Source imports are converted to a high-quality H.264 editing copy (CRF 18). This is not a bit-for-bit copy of the platform's original file. Export is another encode. Instagram upload acceptance has not been tested against a real account.
@@ -64,7 +67,7 @@ Source imports are converted to a high-quality H.264 editing copy (CRF 18). This
 app/                 Next.js application, shared theme and workspace screen
 components/          Editor and its tool panels
 lib/                 Frontend API, canvas drawing, audio orchestration, types
-shared/              Server-validated edit contract and supported video URL rules
+shared/              Server-validated edit contract, text safe zone and supported video URL rules
 server/app.mjs       Fastify routes and workspace access checks
 server/repository.mjs SQLite persistence adapter
 server/jobs.mjs      Concurrency-limited media-job runner and worker protocol
@@ -93,7 +96,7 @@ pnpm build
 node scripts/smoke.mjs
 ```
 
-The authenticated smoke check prepares a synthetic six-second clip and a four-second cut/text edit, verifies range playback, stale-write rejection, both export snapshot qualities and rejection of server renders. Set SMOKE_USERNAME and SMOKE_PASSWORD for an existing disposable account. Browser verification is separate: test 720p/1080p output, navigation during export and Cancel. Tests also cover FFT/STFT reconstruction; synthetic tests do not establish musical separation quality or iPhone performance.
+The authenticated smoke check prepares a synthetic six-second clip and a four-second cut/text/blur edit, verifies range playback, stale-write rejection, both device-export snapshot qualities, and a real server render (a stale revision refused, then two blur boxes rendered and the result played back). Set SMOKE_USERNAME and SMOKE_PASSWORD for an existing disposable account. Browser verification is separate: test 720p/1080p output, navigation during export and Cancel. Tests also cover FFT/STFT reconstruction; synthetic tests do not establish musical separation quality or iPhone performance.
 
 Multi-platform validation covers supported URL forms, permission checks, platform tagging, queue routing, extractor selection, live/duration limits and the stdout protocol. A public YouTube sample completed a real download and normalization during local verification. The TikTok sample reached its extractor but the host connection timed out; successful TikTok downloading still needs verification on a network that can reach TikTok.
 

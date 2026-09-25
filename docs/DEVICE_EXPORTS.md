@@ -8,7 +8,9 @@ Each enqueue saves the edit then obtains an owner-scoped server snapshot ticket.
 
 The dedicated worker decodes via range requests with a 16 MB cache, uses a two-canvas decode pool, prefers the hardware encoder after capability checks, rasterizes text once, and trims audio at clip boundaries. Encoded output has a 128 MB memory guard; larger exports require 720p or a shorter edit. Cancel terminates the worker and releases its resources. The queue continues to the next item on failure/cancellation.
 
-Once upload/registration begins, Cancel is disabled to avoid suggesting that an already-committed server write can be undone. The API probes dimensions, duration and codecs, creates a thumbnail, and stores the original MP4 without re-encoding it. The legacy server-render endpoint returns HTTP 410. Downloads/import normalization and existing audio preparation still use server resources.
+Once upload/registration begins, Cancel is disabled to avoid suggesting that an already-committed server write can be undone. The API probes dimensions, duration and codecs, creates a thumbnail, and stores the original MP4 without re-encoding it. Downloads/import normalization and existing audio preparation still use server resources.
+
+Server rendering is the other option, chosen per export in the same menu as the quality (`POST /api/projects/:id/renders`). The browser still draws the background and the text, because those have to match the preview exactly; FFmpeg does the video, the crop, the blur, the cuts and the audio. One render runs at a time and its FFmpeg is capped at a share of the machine, so a render cannot take the box down with it — see `MEDIA_CPU_SHARE` and `TYPE_LIMITS` in `server/jobs.mjs`. A render belongs to the server once queued: leaving the editor or closing the tab stops the progress line, not the work. A browser without WebCodecs gets the server preselected.
 
 ## Limitations and phone testing
 
@@ -16,7 +18,8 @@ Once upload/registration begins, Cancel is disabled to avoid suggesting that an 
 - Queue is in-memory, not recoverable after reload/tab closure. A before-unload warning and visible keep-awake notice are provided. Screen wake lock is best-effort. OS suspension, phone lock or switching browser apps is not guaranteed to continue processing; stalled workers time out with an error.
 - Failed uploads currently require another export. Check Edited videos before retrying if a save response was lost.
 - Actual iPhone performance must be measured over trusted HTTPS. Desktop synthetic tests are not phone benchmarks.
-- Test both qualities with audio, mute, cuts, crop and text; start another edit while rendering; cancel active/queued jobs; check cross-tab serialization, sign-out and unsupported-codec messages.
+- Test both qualities with audio, mute, cuts, crop, text and blur; start another edit while rendering; cancel active/queued jobs; check cross-tab serialization, sign-out and unsupported-codec messages.
+- For server export, check that a second render queues behind the first, that closing the tab still lands the export, and that the finished frame matches the on-device one for the same edit.
 
 ## Access fixes
 

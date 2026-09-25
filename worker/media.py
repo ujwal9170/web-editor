@@ -16,9 +16,26 @@ from PIL import Image
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
+# This job's CPU allowance, set from the request in execute(). FFmpeg left to
+# itself takes every core, and on a box that is also serving the app that means
+# one render makes every other request queue behind it. The API decides the
+# number (server/jobs.mjs) because only it knows how many jobs may be sharing
+# the machine; 0 means "unset", which only happens outside the API.
+THREADS = 0
+
+
+def thread_flags():
+    return ['-threads', str(THREADS)] if THREADS > 0 else []
+
 
 def run(args, timeout=1500):
-    proc = subprocess.run([FFMPEG, '-hide_banner', '-loglevel', 'error', '-y', *args], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout)
+    # -threads is positional, and where it sits decides what it limits. At the
+    # front it caps decoding only: x264 goes on opening a thread per core, which
+    # is verifiable in its own options line. The encoder needs its own copy
+    # immediately before the output file, and every caller here passes the
+    # output path last.
+    limited = [*thread_flags(), *args[:-1], *thread_flags(), args[-1]] if args else []
+    proc = subprocess.run([FFMPEG, '-hide_banner', '-loglevel', 'error', '-y', *limited], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout)
     if proc.returncode:
         raise ValueError('Media processing failed: ' + proc.stderr[-1200:])
 
@@ -215,6 +232,42 @@ def isolate(job, root):
     return {'duration': info['duration'], 'width': info['width'], 'height': info['height'], 'hasAudio': True, 'file': target.name, 'thumbnail': thumb.name, 'size': target.stat().st_size}
 
 
+def blur_filters(regions, width, height, previous='base0'):
+    """Blur each region of the composed frame, over its own span of the clip.
+
+    Mirrors blurRegions() in lib/canvas.ts: the same rectangle of the same
+    finished canvas, blurred with three box passes, applied once the video sits
+    on its background and before any text is drawn over it. Each box reads the
+    frame as the previous one left it, so overlapping boxes compound exactly as
+    they do in the preview. The split is required -- a filter output may only be
+    consumed once, and each box both reads the frame and draws back onto it.
+    """
+    filters = []
+    for i, region in enumerate(regions):
+        x = max(0, min(width - 2, int(round(float(region['x']) * width))))
+        y = max(0, min(height - 2, int(round(float(region['y']) * height))))
+        w = max(2, min(width - x, int(round(float(region['width']) * width))))
+        h = max(2, min(height - y, int(round(float(region['height']) * height))))
+        # blurRadius() in lib/canvas.ts, then held to half the box: boxblur
+        # rejects a radius larger than what it is being asked to blur. Chroma
+        # radius is left to FFmpeg, which scales it for the subsampled planes.
+        radius = max(1, min(int(float(region['intensity']) / 100 * 0.07 * width), (w - 1) // 2, (h - 1) // 2))
+        source, passthrough, blurred, output = f'bs{i}a', f'bs{i}b', f'bb{i}', f'blurred{i}'
+        start, end = region.get('startMs'), region.get('endMs')
+        # No timing at all means the whole clip, which is what every box saved
+        # before blur had a timeline meant.
+        enable = ''
+        if start is not None or end is not None:
+            first = float(start or 0) / 1000
+            last = float(end) / 1000 if end is not None else 359999
+            enable = f":enable='between(t,{first},{last})'"
+        filters.append(f'[{previous}]split=2[{source}][{passthrough}]')
+        filters.append(f'[{source}]crop={w}:{h}:{x}:{y},boxblur={radius}:3[{blurred}]')
+        filters.append(f'[{passthrough}][{blurred}]overlay={x}:{y}{enable}[{output}]')
+        previous = output
+    return filters, previous
+
+
 def overlay_filters(overlays, previous='base0'):
     """Chain each cropped overlay at its own offset.
 
@@ -290,7 +343,11 @@ def render(job, root):
     dx = round(avail_x * offset_x)
     dy = round(avail_y * offset_y)
     filters = [f'[0:v]crop={cw}:{ch}:{cx}:{cy},scale={dw}:{dh},setsar=1,fps=30[video]', f'[1:v]fps=30,setsar=1[bg]', f'[bg][video]overlay={dx}:{dy}:shortest=1[base0]']
-    chain, previous = overlay_filters(overlays)
+    # Blur first, then text: a caption sitting over a blurred box stays sharp,
+    # exactly as the preview and the on-device export draw it.
+    blurred, previous = blur_filters(spec.get('blur') or [], width, height)
+    filters += blurred
+    chain, previous = overlay_filters(overlays, previous)
     filters += chain
     segments = [s for s in spec['segments'] if s['enabled']]
     count = len(segments)
@@ -302,7 +359,9 @@ def render(job, root):
         filters.append(f'[as{i}]atrim=start={start}:end={end},asetpts=PTS-STARTPTS' + (',volume=0' if spec['audio']['mode'] == 'mute' else '') + f'[a{i}]')
     filters.append(''.join(f'[v{i}][a{i}]' for i in range(count)) + f'concat=n={count}:v=1:a=1[outv][outa]')
     target = root / (job['id'] + '.mp4')
-    run([*args, '-filter_complex_threads', '2', '-filter_complex', ';'.join(filters), '-map', '[outv]', '-map', '[outa]', '-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-maxrate', '20M', '-bufsize', '40M', '-threads', '4', '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-movflags', '+faststart', str(target)])
+    # Filter threads come out of the same allowance as the encoder's, not on
+    # top of it -- see THREADS.
+    run([*args, '-filter_complex_threads', str(max(1, THREADS // 2) if THREADS else 2), '-filter_complex', ';'.join(filters), '-map', '[outv]', '-map', '[outa]', '-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-maxrate', '20M', '-bufsize', '40M', '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-movflags', '+faststart', str(target)])
     thumb = root / (job['id'] + '.jpg'); thumbnail(target, thumb)
     return {**probe(target), 'file': target.name, 'thumbnail': thumb.name, 'size': target.stat().st_size}
 
@@ -310,6 +369,8 @@ def render(job, root):
 def execute(job):
     # stdout is the API's JSON protocol, never a library's progress/log stream.
     # yt-dlp's quiet flag alone still allows carriage-return progress output.
+    global THREADS
+    THREADS = max(0, int(job.get('threads') or 0))
     with redirect_stdout(sys.stderr):
         root = Path(job['root']).resolve()
         action = job['action']
