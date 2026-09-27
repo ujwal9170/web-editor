@@ -13,6 +13,60 @@ from yt_dlp.downloader.common import FileDownloader
 from worker import media
 
 
+class CropGeometryTests(unittest.TestCase):
+    def test_matches_device_geometry_at_both_resolutions(self):
+        import subprocess
+        cases = []
+        for width in (720, 1080):
+            for source in ((360, 640), (1920, 1080), (642, 482)):
+                for extras in ({}, {'offsetX': 0, 'offsetY': 1},
+                               {'zoom': 0.25, 'centerX': 0.1, 'centerY': 0.9},
+                               {'zoom': 2.37, 'centerX': 0, 'centerY': 1},
+                               {'zoom': 4, 'offsetX': 0.8, 'offsetY': 0.2}):
+                    crop = {'x': 0.1, 'y': 0.2, 'width': 0.7, 'height': 0.6, **extras}
+                    cases.append([crop, *source, width, width * 16 // 9])
+        script = "import {cropGeometry} from './shared/export.mjs'; let s=''; for await (const c of process.stdin) s+=c; console.log(JSON.stringify(JSON.parse(s).map(c=>cropGeometry(...c))));"
+        result = subprocess.run(['node', '--input-type=module', '-e', script],
+                                input=json.dumps(cases), capture_output=True, text=True,
+                                check=True, timeout=30)
+        for args, expected in zip(cases, json.loads(result.stdout)):
+            with self.subTest(args=args):
+                actual = media.crop_geometry(*args)
+                for key, value in expected.items():
+                    self.assertAlmostEqual(actual[key], value)
+
+    def test_actual_render_keeps_zoom_and_position(self):
+        # Solid white source on black makes its visible bounds measurable.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media.run(['-f', 'lavfi', '-i', 'color=white:size=64x96:rate=10',
+                       '-f', 'lavfi', '-i', 'anullsrc', '-t', '0.3',
+                       '-c:v', 'libx264', '-c:a', 'aac', str(root / 'source.mp4')])
+            for width in (720, 1080):
+                height = width * 16 // 9
+                media.Image.new('RGB', (width, height)).save(root / 'bg.png')
+                for zoom, center in ((0.5, 0.7), (2, 0.2)):
+                    crop = {'x': 0, 'y': 0, 'width': 1, 'height': 1,
+                            'zoom': zoom, 'centerX': center, 'centerY': 0.5}
+                    job = {'id': 'rendered', 'input': 'source.mp4', 'quality': str(width) + 'p',
+                           'background': 'bg.png', 'overlays': [], 'audioFile': None,
+                           'spec': {'canvas': {'aspectRatio': '9:16'}, 'crop': crop,
+                                    'blur': [], 'audio': {'mode': 'original'},
+                                    'segments': [{'enabled': True, 'startMs': 0, 'endMs': 300}]}}
+                    with patch.object(media, 'THREADS', 1):
+                        media.render(job, root)
+                    media.run(['-i', str(root / 'rendered.mp4'), '-frames:v', '1', str(root / 'frame.png')])
+                    with media.Image.open(root / 'frame.png') as frame:
+                        bounds = frame.convert('L').point(lambda p: 255 if p > 128 else 0).getbbox()
+                    g = media.crop_geometry(crop, 64, 96, width, height)
+                    expected = (max(0, g['drawX']), max(0, g['drawY']),
+                                min(width, g['drawX'] + g['drawWidth']),
+                                min(height, g['drawY'] + g['drawHeight']))
+                    self.assertIsNotNone(bounds)
+                    for a, b in zip(bounds, expected):
+                        self.assertLessEqual(abs(a - b), 2)
+
+
 class ColourMetadataTests(unittest.TestCase):
     def test_reserved_h264_tags_are_repaired_before_thumbnail(self):
         with tempfile.TemporaryDirectory() as directory:

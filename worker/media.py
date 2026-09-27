@@ -321,6 +321,37 @@ def overlay_filters(overlays, previous='base0'):
     return filters, previous
 
 
+def crop_geometry(c, source_width, source_height, width, height):
+    """Mirror shared/export.mjs cropGeometry, including legacy offset fallback.
+
+    Keep fractional canvas coordinates here; FFmpeg's raster/chroma rounding
+    belongs at the filter boundary, not in the placement/zoom calculation.
+    """
+    sw = max(2, math.floor(source_width * c['width'] / 2) * 2)
+    sh = max(2, math.floor(source_height * c['height'] / 2) * 2)
+    left = max(0, min(source_width - sw, math.floor(source_width * c['x'] / 2) * 2))
+    top = max(0, min(source_height - sh, math.floor(source_height * c['y'] / 2) * 2))
+    scale = min(width / source_width, height / source_height)
+    dw = max(2, math.floor(sw * scale / 2) * 2)
+    dh = max(2, math.floor(sh * scale / 2) * 2)
+    avail_x, avail_y = max(0, width - dw), max(0, height - dh)
+    pinned_x = (width - source_width * scale) / 2 + left * scale
+    pinned_y = (height - source_height * scale) / 2 + top * scale
+    ox = c.get('offsetX')
+    oy = c.get('offsetY')
+    ox = min(1, max(0, ox if ox is not None else pinned_x / avail_x if avail_x else 0.5))
+    oy = min(1, max(0, oy if oy is not None else pinned_y / avail_y if avail_y else 0.5))
+    zoom = min(4, max(0.25, c.get('zoom') if c.get('zoom') is not None else 1))
+    cx = c.get('centerX')
+    cy = c.get('centerY')
+    return {
+        'left': left, 'top': top, 'width': sw, 'height': sh,
+        'drawX': (avail_x * ox + dw / 2 if cx is None else cx * width) - dw * zoom / 2,
+        'drawY': (avail_y * oy + dh / 2 if cy is None else cy * height) - dh * zoom / 2,
+        'drawWidth': dw * zoom, 'drawHeight': dh * zoom,
+    }
+
+
 def render(job, root):
     spec = job['spec']
     if spec['canvas']['aspectRatio'] != '9:16':
@@ -351,33 +382,15 @@ def render(job, root):
     if job['audioFile']:
         args += ['-i', str(root / job['audioFile'])]
         audio_input = str(len(overlays) + 2) + ':a'
-    c = spec['crop']
-    cw = max(2, int(info['width'] * c['width']) // 2 * 2)
-    ch = max(2, int(info['height'] * c['height']) // 2 * 2)
-    cx = min(info['width'] - cw, int(info['width'] * c['x']) // 2 * 2)
-    cy = min(info['height'] - ch, int(info['height'] * c['y']) // 2 * 2)
-    # crop.x/y/width/height are a source-selection concern only -- which
-    # pixels are kept, sized at a fixed scale (fitting the FULL, uncropped
-    # source) so cropping never itself zooms. Where the result draws on the
-    # canvas is separate: crop.offsetX/offsetY (0..1) position it anywhere
-    # across the full canvas, defaulting to exactly the position cropping
-    # alone would give it (the edge(s) not cropped stay put) when unset.
-    # Mirrors lib/canvas.ts's compose() and shared/export.mjs's
-    # cropGeometry() exactly, so preview, on-device export and this server
-    # render all agree pixel-for-pixel.
-    scale = min(width / info['width'], height / info['height'])
-    dw = max(2, round(cw * scale) // 2 * 2)
-    dh = max(2, round(ch * scale) // 2 * 2)
-    pinned_x = (width - info['width'] * scale) / 2 + cx * scale
-    pinned_y = (height - info['height'] * scale) / 2 + cy * scale
-    avail_x = max(0, width - dw)
-    avail_y = max(0, height - dh)
-    offset_x = c.get('offsetX', pinned_x / avail_x if avail_x > 0 else 0.5)
-    offset_y = c.get('offsetY', pinned_y / avail_y if avail_y > 0 else 0.5)
-    offset_x = min(1, max(0, offset_x))
-    offset_y = min(1, max(0, offset_y))
-    dx = round(avail_x * offset_x)
-    dy = round(avail_y * offset_y)
+    g = crop_geometry(spec['crop'], info['width'], info['height'], width, height)
+    cw, ch, cx, cy = g['width'], g['height'], g['left'], g['top']
+    # 4:2:0 output requires even raster sizes. Preserve the requested centre
+    # when rounding, and allow negative placement so zoomed footage clips at
+    # the canvas edges instead of being clamped back into view.
+    dw = max(2, math.floor(g['drawWidth'] / 2 + 0.5) * 2)
+    dh = max(2, math.floor(g['drawHeight'] / 2 + 0.5) * 2)
+    dx = math.floor(g['drawX'] + (g['drawWidth'] - dw) / 2 + 0.5)
+    dy = math.floor(g['drawY'] + (g['drawHeight'] - dh) / 2 + 0.5)
     filters = [f'[0:v]crop={cw}:{ch}:{cx}:{cy},scale={dw}:{dh},setsar=1,fps=30[video]', f'[1:v]fps=30,setsar=1[bg]', f'[bg][video]overlay={dx}:{dy}:shortest=1[base0]']
     # Blur first, then text: a caption sitting over a blurred box stays sharp,
     # exactly as the preview and the on-device export draw it.
