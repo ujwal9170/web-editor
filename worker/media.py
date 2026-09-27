@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -61,6 +62,7 @@ def probe(file):
             # ("Audio: aac (LC)", "Audio: aac (HE-AAC)"); anything it does not
             # name LC is re-encoded rather than trusted.
             'aacLc': bool(re.search(r'Audio: aac \(LC\)', text)),
+            'invalidColour': 'reserved' in video,
             'mp4': bool(re.search(r'Input #0, [^\n]*mp4', text))}
 
 
@@ -70,6 +72,40 @@ def thumbnail(file, target):
 
 def normalize(source, target, info=None):
     info = info or probe(source)
+    if info.get('invalidColour') and info.get('h264'):
+        # Reserved H.264 VUI values can be rejected before a filter (including
+        # setparams) ever receives a frame. Repair the bitstream first, without
+        # re-encoding pixels or guessing that the source is BT.709. Preserve
+        # valid fields and the full/limited range flag; only reserved values
+        # become the standard "unspecified" value (2).
+        trace = subprocess.run(
+            [FFMPEG, '-hide_banner', '-i', str(source), '-map', '0:v:0',
+             '-c:v', 'copy', '-bsf:v', 'trace_headers', '-frames:v', '1',
+             '-f', 'null', '-'], capture_output=True, text=True,
+            encoding='utf-8', errors='replace', timeout=30)
+        valid = {
+            'colour_primaries': {1, 2, *range(4, 13), 22},
+            'transfer_characteristics': {1, 2, *range(4, 19)},
+            'matrix_coefficients': {0, 1, 2, *range(4, 15)},
+        }
+        fixes = []
+        for field, allowed in valid.items():
+            values = re.findall(r'\b' + field + r'\s+[01]+\s+=\s+(\d+)', trace.stderr)
+            if any(int(value) not in allowed for value in values):
+                fixes.append(field + '=2')
+        if trace.returncode or not fixes:
+            raise ValueError('Could not repair this video\'s invalid colour metadata.')
+        # Keep temporary media on the same disk as the job, not a small /tmp
+        # tmpfs. Cleanup happens on both success and failure.
+        with TemporaryDirectory(prefix='colour-repair-', dir=Path(target).parent) as folder:
+            repaired = Path(folder) / 'source.mp4'
+            run(['-i', str(source), '-map', '0:v:0', '-map', '0:a:0?',
+                 '-c', 'copy', '-bsf:v', 'h264_metadata=' + ':'.join(fixes),
+                 str(repaired)])
+            repaired_info = probe(repaired)
+            if repaired_info.get('invalidColour'):
+                raise ValueError('This video still has invalid colour metadata after repair.')
+            return normalize(repaired, target, repaired_info)
     if not info['width']:
         raise ValueError('This file does not contain a video stream.')
     # A clip pulled from Instagram/YouTube/TikTok is already H.264 in an MP4

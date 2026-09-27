@@ -13,6 +13,51 @@ from yt_dlp.downloader.common import FileDownloader
 from worker import media
 
 
+class ColourMetadataTests(unittest.TestCase):
+    def test_reserved_h264_tags_are_repaired_before_thumbnail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            good, bad, result = [root / name for name in ('good.mp4', 'bad.mp4', 'result.mp4')]
+            media.run(['-f', 'lavfi', '-i', 'testsrc2=size=64x96:rate=10',
+                       '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(good)])
+            media.run(['-i', str(good), '-c', 'copy', '-bsf:v',
+                       'h264_metadata=colour_primaries=3:transfer_characteristics=3:matrix_coefficients=3', str(bad)])
+            original = bad.read_bytes()
+            self.assertTrue(media.probe(bad)['invalidColour'])
+            info = media.normalize(bad, result)
+            self.assertFalse(info['invalidColour'])
+            self.assertEqual((info['width'], info['height']), (64, 96))
+            media.thumbnail(result, root / 'preview.jpg')
+            with media.Image.open(root / 'preview.jpg') as image:
+                self.assertEqual(image.width, 360)
+            self.assertEqual(bad.read_bytes(), original)
+            self.assertFalse(list(root.glob('colour-repair-*')))
+            with patch.object(media, 'run', side_effect=ValueError('Remux failed')):
+                with self.assertRaisesRegex(ValueError, 'Remux failed'):
+                    media.normalize(bad, root / 'failed.mp4')
+            self.assertFalse(list(root.glob('colour-repair-*')))
+            self.assertEqual(bad.read_bytes(), original)
+
+    def test_repair_preserves_valid_colour_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, result = root / 'source.mp4', root / 'result.mp4'
+            good = root / 'good.mp4'
+            media.run(['-f', 'lavfi', '-i', 'testsrc2=size=64x96:rate=10',
+                       '-t', '1', '-c:v', 'libx264', '-color_primaries', 'bt709',
+                       '-color_trc', 'bt709', '-colorspace', 'bt709', str(good)])
+            media.run(['-i', str(good), '-c', 'copy', '-bsf:v',
+                       'h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=3', str(source)])
+            media.normalize(source, result)
+            trace = media.subprocess.run(
+                [media.FFMPEG, '-i', str(result), '-c:v', 'copy', '-bsf:v',
+                 'trace_headers', '-frames:v', '1', '-f', 'null', '-'],
+                capture_output=True, text=True, timeout=30)
+            self.assertRegex(trace.stderr, r'colour_primaries\s+[01]+\s+=\s+1\b')
+            self.assertRegex(trace.stderr, r'transfer_characteristics\s+[01]+\s+=\s+1\b')
+            self.assertRegex(trace.stderr, r'matrix_coefficients\s+[01]+\s+=\s+2\b')
+
+
 class WorkerProtocolTests(unittest.TestCase):
     def test_downloaders_and_limits(self):
         options = media.download_options({'id': 'test'}, Path('.'))
