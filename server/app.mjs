@@ -1104,6 +1104,17 @@ export async function createApp({
       await removeFiles(item, ["file", "audioFile", "thumbnail"]);
       repo.put("media", { ...item, status: "expired" });
     }
+    // Also catch edits left behind by the old retention policy. Keep active
+    // work intact; exports and reusable templates have independent lifetimes.
+    const expiredEdits = repo.list("project").filter((project) => {
+      const source = repo.get("media", project.mediaId);
+      return (
+        source?.status === "expired" &&
+        !mediaInUse(project.mediaId) &&
+        !projectBusy(project.id)
+      );
+    });
+    if (expiredEdits.length) await removeRecords(editRecords(expiredEdits));
     for (const item of repo.list("export"))
       if (item.expiresAt < now) await deleteExport(item);
     for (const ticket of repo.list("deviceExport"))

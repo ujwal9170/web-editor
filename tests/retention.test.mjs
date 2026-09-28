@@ -116,15 +116,64 @@ test("a source is deleted 36 hours after import, with its thumbnail and stems", 
   for (const name of ["old.mp4", "old.jpg", "old.wav", "old-stem.wav"])
     assert.equal(existsSync(path.join(w.root, name)), false, name);
   assert.equal(w.repo.get("audio", stem.id), null);
-  // The edit itself survives its source: it is small, and it says why it
-  // stopped working.
-  assert.ok(w.repo.get("project", project.id));
+  assert.equal(w.repo.get("project", project.id), null);
   assert.equal(w.repo.get("media", keeper.id).status, "ready");
   assert.equal(existsSync(path.join(w.root, "fresh.mp4")), true);
   assert.equal(
     w.repo.get("media", keeper.id).expiresAt,
     w.repo.get("media", keeper.id).createdAt + RETENTION,
   );
+});
+
+test("legacy expired edits are cleaned without deleting templates, exports or fresh edits", async (t) => {
+  const w = workspace(t);
+  const source = w.repo.put("media", {
+    status: "expired",
+    createdAt: Date.now() - 40 * HOUR,
+  });
+  const edit = w.repo.put("project", {
+    mediaId: source.id,
+    edit: initialEdit(6000),
+  });
+  const stem = w.repo.put("audio", {
+    projectId: edit.id,
+    file: w.file("legacy.wav"),
+  });
+  const template = w.repo.put("template", { edit: initialEdit(6000) });
+  const exported = w.repo.put("export", {
+    projectId: edit.id,
+    file: w.file("export.mp4"),
+  });
+  const fresh = w.repo.put("media", {
+    status: "ready",
+    file: w.file("fresh.mp4"),
+  });
+  const freshEdit = w.repo.put("project", {
+    mediaId: fresh.id,
+    edit: initialEdit(6000),
+  });
+  const busy = w.repo.put("project", {
+    mediaId: source.id,
+    edit: initialEdit(6000),
+  });
+  const job = w.repo.put("job", {
+    type: "render",
+    status: "running",
+    projectId: busy.id,
+  });
+  const app = await w.start();
+  assert.equal(w.repo.get("project", edit.id), null);
+  assert.equal(w.repo.get("audio", stem.id), null);
+  assert.equal(existsSync(path.join(w.root, "legacy.wav")), false);
+  assert.ok(w.repo.get("template", template.id));
+  assert.ok(w.repo.get("export", exported.id));
+  assert.ok(existsSync(path.join(w.root, "export.mp4")));
+  assert.ok(w.repo.get("project", freshEdit.id));
+  assert.ok(w.repo.get("project", busy.id));
+  await app.close();
+  w.repo.put("job", { ...job, status: "done" });
+  await w.start();
+  assert.equal(w.repo.get("project", busy.id), null);
 });
 
 test("an export is deleted 36 hours after it was saved", async (t) => {
