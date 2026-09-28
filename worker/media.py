@@ -285,8 +285,10 @@ def blur_filters(regions, width, height, previous='base0'):
         w = max(2, min(width - x, int(round(float(region['width']) * width))))
         h = max(2, min(height - y, int(round(float(region['height']) * height))))
         # blurRadius() in lib/canvas.ts, then held to half the box: boxblur
-        # rejects a radius larger than what it is being asked to blur. Chroma
-        # radius is left to FFmpeg, which scales it for the subsampled planes.
+        # rejects a radius larger than what it is being asked to blur. FFmpeg
+        # defaults chroma radius to luma radius, NOT a subsampling-scaled value.
+        # Clamp against actual chroma dimensions (cw/ch) too, including tiny
+        # edge-clipped boxes where the only valid chroma radius is zero.
         radius = max(1, min(int(float(region['intensity']) / 100 * 0.07 * width), (w - 1) // 2, (h - 1) // 2))
         source, passthrough, blurred, output = f'bs{i}a', f'bs{i}b', f'bb{i}', f'blurred{i}'
         start, end = region.get('startMs'), region.get('endMs')
@@ -298,7 +300,7 @@ def blur_filters(regions, width, height, previous='base0'):
             last = float(end) / 1000 if end is not None else 359999
             enable = f":enable='between(t,{first},{last})'"
         filters.append(f'[{previous}]split=2[{source}][{passthrough}]')
-        filters.append(f'[{source}]crop={w}:{h}:{x}:{y},boxblur={radius}:3[{blurred}]')
+        filters.append(f"[{source}]crop={w}:{h}:{x}:{y},boxblur={radius}:3:chroma_radius='min({radius},floor(min(cw,ch)/2))':chroma_power=3[{blurred}]")
         filters.append(f'[{passthrough}][{blurred}]overlay={x}:{y}{enable}[{output}]')
         previous = output
     return filters, previous

@@ -1,6 +1,7 @@
 import { test } from "node:test";
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -779,6 +780,27 @@ test("a server render queues the video work with the browser's own artwork", asy
       assert.equal(refused.statusCode, 400);
     }
     assert.equal(queued.length, 1);
+    const beforeAudioChecks = readdirSync(root).sort();
+    const selections = [
+      { id: randomUUID() },
+      { id: randomUUID(), userId: "someone-else", projectId: project.id, status: "ready" },
+      { id: randomUUID(), userId: owner.id, projectId: "another-project", status: "ready" },
+      { id: randomUUID(), userId: owner.id, projectId: project.id, status: "running" },
+    ];
+    for (const audio of selections) {
+      if (audio.status) repo.put("audio", { ...audio, file: "stem.wav" });
+      repo.put("project", { ...project, edit: { ...edit, audio: { mode: "remove-vocals", derivativeId: audio.id } } });
+      const refused = await render([{ png, x: 0, y: 0 }, { png: null, x: 0, y: 0 }]);
+      assert.ok(refused.statusCode >= 400, refused.body);
+      assert.doesNotMatch(refused.body, /Invalid uuid/);
+      assert.equal(queued.length, 1);
+      assert.deepEqual(readdirSync(root).sort(), beforeAudioChecks, audio.id + " leaked artwork");
+    }
+    const validAudio = repo.put("audio", { userId: owner.id, projectId: project.id, status: "ready", file: "stem.wav" });
+    repo.put("project", { ...project, edit: { ...edit, audio: { mode: "vocals-only", derivativeId: validAudio.id } } });
+    const accepted = await render([{ png, x: 0, y: 0 }, { png: null, x: 0, y: 0 }]);
+    assert.equal(accepted.statusCode, 202, accepted.body);
+    assert.equal(queued.at(-1).audioFile, "stem.wav");
   } finally {
     await app.close();
     repo.close();

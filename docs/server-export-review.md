@@ -2,7 +2,7 @@
 
 Reviewed upstream `b9b3fe8` locally; no production deployment or server edits.
 
-## Findings (not fixed in the colour-metadata patch)
+## Findings (fixed locally; deployment separate)
 
 1. **Fixed locally: server renders ignored current video placement and zoom.**
    `worker/media.py:render` only reads legacy `offsetX`/`offsetY`, unlike
@@ -12,18 +12,23 @@ Reviewed upstream `b9b3fe8` locally; no production deployment or server edits.
    cross-language parity cases and real 720p/1080p zoom/placement render tests.
    FFmpeg raster/chroma rounding is allowed at most two pixels in bounds tests.
 
-2. **High: thin, strong blur regions fail the entire server export.**
+2. **Fixed locally: thin, strong blur regions failed the entire server export.**
    `blur_filters` clamps luma radius but leaves the chroma radius at its default
    (the same value). On 4:2:0 frames the chroma plane is smaller. Reproduced with
    an actual 720p render, region x=.1/y=.2/width=.3/height=.03/intensity=100:
    `Invalid chroma_param radius value 18, must be >= 0 and <= 9`.
-   Specify a chroma-safe radius and test minimum-width/height boxes.
+   Chroma radius now clamps to actual chroma-plane dimensions, including zero
+   for two-pixel edge boxes. Actual 720p/1080p renders cover thin horizontal,
+   vertical and edge-clipped regions at maximum intensity.
 
-3. **Medium: invalid audio selection leaks prepared artwork files.**
+3. **Fixed locally: invalid audio selection leaked prepared artwork files.**
    The render route writes PNGs, exits its cleanup try/catch, then resolves the
    audio derivative. A missing, wrong-project or non-ready derivative throws
-   before queue registration and neither cleanup callback runs. Validate audio
-   before creating artwork or include that preparation in the cleanup scope.
+   before queue registration and neither cleanup callback ran. Audio validation
+   now happens before any artwork is written. API tests cover missing, foreign,
+   wrong-project and unfinished derivatives without new files or queued jobs;
+   valid audio still queues. Partial writes are registered for cleanup before
+   writing begins. Old orphan files are not retroactively deleted.
 
 One-render-at-a-time scheduling and access tests pass, but passing unit tests
 does not establish real VPS throughput or preview/export parity. FFmpeg thread

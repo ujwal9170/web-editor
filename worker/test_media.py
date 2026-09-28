@@ -183,6 +183,36 @@ class OverlayCompositingTests(unittest.TestCase):
 
 
 class BlurCompositingTests(unittest.TestCase):
+    def test_thin_and_edge_clipped_boxes_render_at_full_intensity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media.run(['-f', 'lavfi', '-i', 'testsrc2=size=64x96:rate=10',
+                       '-f', 'lavfi', '-i', 'anullsrc', '-t', '0.3',
+                       '-c:v', 'libx264', '-c:a', 'aac', str(root / 'source.mp4')])
+            for width in (720, 1080):
+                height = width * 16 // 9
+                media.Image.new('RGB', (width, height)).save(root / 'bg.png')
+                regions = [
+                    {'x': .1, 'y': .2, 'width': .3, 'height': .03},
+                    {'x': .5, 'y': .1, 'width': .015, 'height': .5},
+                    {'x': .2, 'y': .5, 'width': .5, 'height': .01},
+                    {'x': .998, 'y': .998, 'width': .015, 'height': .01},
+                ]
+                spec = {'canvas': {'aspectRatio': '9:16'},
+                        'crop': {'x': 0, 'y': 0, 'width': 1, 'height': 1},
+                        'blur': [{**r, 'intensity': 100} for r in regions],
+                        'audio': {'mode': 'original'},
+                        'segments': [{'enabled': True, 'startMs': 0, 'endMs': 300}]}
+                job = {'id': 'blurred', 'input': 'source.mp4', 'quality': str(width) + 'p',
+                       'background': 'bg.png', 'overlays': [], 'audioFile': None, 'spec': spec}
+                with patch.object(media, 'THREADS', 1):
+                    result = media.render(job, root)
+                self.assertEqual((result['width'], result['height']), (width, height))
+                self.assertGreater(result['size'], 0)
+                media.run(['-i', str(root / 'blurred.mp4'), '-frames:v', '1', str(root / 'frame.png')])
+                with media.Image.open(root / 'frame.png') as image:
+                    self.assertEqual(image.size, (width, height))
+
     def test_each_box_blurs_its_own_rectangle_over_its_own_span(self):
         # The split is not optional: a filter output may be consumed once, and
         # every box both reads the frame and draws back onto it.
@@ -193,10 +223,10 @@ class BlurCompositingTests(unittest.TestCase):
         self.assertEqual(last, 'blurred1')
         self.assertEqual(filters, [
             '[base0]split=2[bs0a][bs0b]',
-            '[bs0a]crop=540:480:108:384,boxblur=37:3[bb0]',
+            "[bs0a]crop=540:480:108:384,boxblur=37:3:chroma_radius='min(37,floor(min(cw,ch)/2))':chroma_power=3[bb0]",
             "[bs0b][bb0]overlay=108:384:enable='between(t,0.0,3.0)'[blurred0]",
             '[blurred0]split=2[bs1a][bs1b]',
-            '[bs1a]crop=270:480:540:960,boxblur=15:3[bb1]',
+            "[bs1a]crop=270:480:540:960,boxblur=15:3:chroma_radius='min(15,floor(min(cw,ch)/2))':chroma_power=3[bb1]",
             "[bs1b][bb1]overlay=540:960:enable='between(t,3.0,6.0)'[blurred1]",
         ])
 

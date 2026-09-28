@@ -820,16 +820,25 @@ export async function createApp({
         throw new Error(
           "This artwork is too large to render. Use fewer or smaller image overlays.",
         );
+      // Reject missing, foreign or unfinished audio before creating artwork.
+      // Otherwise validation throws before the queue owns cleanup callbacks.
+      let audioFile = null;
+      if (["remove-vocals", "vocals-only"].includes(spec.audio.mode)) {
+        const audio = get("audio", spec.audio.derivativeId, req);
+        if (audio.projectId !== project.id || audio.status !== "ready")
+          throw new Error("Apply processed audio first.");
+        audioFile = audio.file;
+      }
       const id = randomUUID();
       const files = [];
       const writeArtwork = async (png, file) => {
         if (!png.startsWith("data:image/png;base64,"))
           throw new Error("Expected PNG artwork.");
+        files.push(file);
         await writeFile(
           path.join(root, file),
           Buffer.from(png.split(",")[1], "base64"),
         );
-        files.push(file);
       };
       const clean = async () => {
         for (const f of files) await rm(path.join(root, f), { force: true });
@@ -857,13 +866,6 @@ export async function createApp({
         // Rejected artwork must not leave half-written PNGs behind.
         await clean();
         throw error;
-      }
-      let audioFile = null;
-      if (["remove-vocals", "vocals-only"].includes(spec.audio.mode)) {
-        const audio = get("audio", spec.audio.derivativeId, req);
-        if (audio.projectId !== project.id || audio.status !== "ready")
-          throw new Error("Apply processed audio first.");
-        audioFile = audio.file;
       }
       const job = queue.add(
         "render",
